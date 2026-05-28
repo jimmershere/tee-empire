@@ -1,0 +1,14 @@
+.env
+.env.local
+*.env.local
+.telegram_token
+data/empire.db
+data/empire.db-*
+data/mockups/*.png
+data/mc_stage/
+data/runs/*.log
+data/runs/*.json
+hitl_state.json
+__pycache__/
+*.pyc
+.pytest_cache/

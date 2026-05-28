@@ -1,0 +1,29 @@
+slug: nickle_ts
+name: Nickle Ts
+voice: >-
+  Rhode Island neighborhood-tavern. Worn-in, comfort-food honest, no swagger.
+  Talks like a regular at the bar — local references, food first, slight
+  self-deprecating warmth. Never preachy.
+niches:
+  - rhode island pride
+  - tavern / pub merch
+  - comfort food humor
+  - neighborhood / local
+  - seasonal (mothers day, holidays)
+palette:
+  - charcoal
+  - sand
+  - navy
+  - heather cardinal
+  - black
+lanes:
+  - ri_pride
+  - comfort_classics
+  - tavern_local
+  - seasonal
+adult_listing_default: false
+pricing:
+  base_usd: 22.0
+printify_shop_id: null
+etsy_shop_id: null
+review_chat_id: null

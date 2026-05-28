@@ -1,0 +1,34 @@
+slug: earl_biggers
+name: Earl Biggers
+voice: >-
+  Adult-humor, bar-room confidence. Punchy typographic copy with a deadpan grin.
+  Marketplace-safe edge — suggestive but not slur-laden. Targets late-night
+  scrollers who buy the joke, not the explanation.
+niches:
+  - adult humor
+  - motivational with bite
+  - office-safe-ish wordplay
+palette:
+  - black
+  - vintage black
+  - navy
+  - army
+  - heather dark gray
+lanes:
+  - force_multipliers   # nerdy/l33t/math/symbols ("10×*", "0xDEADBEEF*", "PEBKAC*") — STEM-nerd buyer
+  - biggers             # Earl Biggers for grown-ups: brand wordplay + ironic anger + burnout grit + deadpan
+  - brocode             # bro/dad-bro tropes
+  - fellowship          # squad/found-family
+adult_listing_default: true
+pricing:
+  base_usd: 24.0
+  asterisk_premium_usd: 26.0
+# These come from your Printify/Etsy dashboards. Leave blank to run dry-run.
+printify_shop_id: "27415408"           # EarlBiggersDammit (Etsy-linked)
+printify_blueprint_id: 12              # Bella+Canvas 3001 Unisex Jersey Short Sleeve Tee
+printify_print_provider_id: 6          # T Shirt and Sons
+printify_variant_ids: [18100, 18101, 18102, 18103, 18104]  # Black / S, M, L, XL, 2XL
+printify_price_cents: 2600             # $26 — adult-humor premium
+etsy_shop_id: null
+# Telegram chat that receives review cards for this brand.
+review_chat_id: null

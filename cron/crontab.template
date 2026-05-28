@@ -1,0 +1,17 @@
+# TeeEmpire cron template. Install with:
+#   crontab /app/cc/empire/cron/crontab.template
+# Adjust schedule, brand, and per-lane counts to taste.
+
+# Plan + design + list (dry-run by default; remove --skip-* and add --live when ready)
+0 6 * * *  cd /app/cc && python3 -m empire.cli run --brand earl_biggers --per-lane 2 --skip-reviews >> /app/cc/empire/data/runs/eb-daily.log 2>&1
+15 6 * * * cd /app/cc && python3 -m empire.cli run --brand nickle_ts   --per-lane 2 --skip-reviews >> /app/cc/empire/data/runs/nt-daily.log 2>&1
+
+# Send review cards once mockups are ready
+30 6 * * * cd /app/cc && python3 -m empire.cli review --brand earl_biggers >> /app/cc/empire/data/runs/eb-review.log 2>&1
+45 6 * * * cd /app/cc && python3 -m empire.cli review --brand nickle_ts   >> /app/cc/empire/data/runs/nt-review.log 2>&1
+
+# Drain reviewer callbacks every 5 min during waking hours
+*/5 8-22 * * * cd /app/cc && python3 -m empire.cli poll --timeout 5 --live >> /app/cc/empire/data/runs/poll.log 2>&1
+
+# Weekly analytics snapshot
+0 9 * * 1 cd /app/cc && python3 -m empire.cli analytics > /app/cc/empire/data/runs/weekly-analytics-$(date +\%Y\%m\%d).json
