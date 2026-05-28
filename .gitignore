@@ -9,6 +9,9 @@ data/mc_stage/
 data/runs/*.log
 data/runs/*.json
 hitl_state.json
+data/empire-pending.json
+data/empire-decisions.jsonl
+data/empire-applied.jsonl
 __pycache__/
 *.pyc
 .pytest_cache/
