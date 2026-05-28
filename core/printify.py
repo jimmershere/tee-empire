@@ -105,6 +105,20 @@ class PrintifyClient:
         return self._request("POST", f"/shops/{self.shop_id}/products.json",
                              payload=payload, dry_run=dry_run)
 
+    def update_product(self, product_id: str,
+                       updates: Dict[str, Any],
+                       dry_run: bool = False) -> Dict[str, Any]:
+        """PUT /shops/{shop_id}/products/{product_id}.json with partial updates.
+
+        ``updates`` typically contains ``title``, ``description``, ``tags``.
+        Re-call ``publish_product`` afterwards to push the change to the
+        connected sales channel (Etsy).
+        """
+        if not self.shop_id and not dry_run:
+            raise PrintifyError("PRINTIFY_SHOP_ID is not configured.")
+        return self._request("PUT", f"/shops/{self.shop_id}/products/{product_id}.json",
+                             payload=updates, dry_run=dry_run)
+
     def publish_product(self, product_id: str, dry_run: bool = False) -> Dict[str, Any]:
         if not self.shop_id and not dry_run:
             raise PrintifyError("PRINTIFY_SHOP_ID is not configured.")
