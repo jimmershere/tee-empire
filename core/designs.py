@@ -8,13 +8,22 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
     _PIL_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _PIL_AVAILABLE = False
+
+
+# Monospace fonts to try for code overlays (first hit wins).
+_MONO_FONTS = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+)
 
 from . import images
 from . import judge
@@ -50,6 +59,89 @@ def _pick_text_color(shirt: str) -> str:
     return "white" if shirt.lower() in dark else "black"
 
 
+def overlay_text_panel(image_bytes: bytes, *,
+                       text: str,
+                       region: Tuple[float, float, float, float] = (0.13, 0.08, 0.74, 0.30),
+                       panel_color: str = "#000000",
+                       border_color: str = "#D49A2C",
+                       border_width: int = 6,
+                       text_color: str = "#FFFFFF",
+                       padding: int = 18,
+                       line_spacing: float = 1.15) -> bytes:
+    """Paste a filled rectangle + monospace text on top of an image.
+
+    Used by ``build_mockup`` when a Concept's ``extra["text_overlay"]`` is set.
+    Lets us guarantee verbatim code/long-text rendering (which image models
+    can't reliably do for dense content like brainfuck source) while still
+    leveraging the model for the surrounding art.
+
+    Args:
+        image_bytes: raw PNG/JPG bytes from the model.
+        text: exact text to render inside the panel. Will be character-wrapped
+              to fit the panel width at the largest legible monospace size.
+        region: (x, y, w, h) as fractions of image size. Default = top-third
+                centered, leaving room for a mascot below.
+    """
+    if not _PIL_AVAILABLE:
+        return image_bytes
+    img = Image.open(BytesIO(image_bytes)).convert("RGB")
+    W, H = img.size
+    x = int(region[0] * W)
+    y = int(region[1] * H)
+    w = int(region[2] * W)
+    h = int(region[3] * H)
+    draw = ImageDraw.Draw(img)
+    # Draw filled panel + border
+    panel_rgb = _parse_color(panel_color)
+    border_rgb = _parse_color(border_color)
+    draw.rectangle([x, y, x + w, y + h], fill=panel_rgb,
+                   outline=border_rgb, width=border_width)
+    # Pick a monospace font
+    font_path = next((p for p in _MONO_FONTS if Path(p).exists()), None)
+    avail_w = w - 2 * padding
+    avail_h = h - 2 * padding
+    # Auto-size the text to fit the panel
+    font_size = max(int(h * 0.10), 8)
+    text_rgb = _parse_color(text_color)
+    lines: List[str] = []
+    while font_size >= 6:
+        if font_path:
+            font = ImageFont.truetype(font_path, font_size)
+        else:
+            font = ImageFont.load_default()
+        # measure mono char width using "0" as representative
+        try:
+            char_w = font.getlength("0")
+        except AttributeError:
+            char_w = font_size * 0.6
+        chars_per_line = max(1, int(avail_w / char_w))
+        lines = _wrap_fixed_width(text, chars_per_line)
+        line_h = int(font_size * line_spacing)
+        if line_h * len(lines) <= avail_h:
+            break
+        font_size -= 1
+    # Draw the text
+    text_x = x + padding
+    text_y = y + padding
+    for line in lines:
+        draw.text((text_x, text_y), line, font=font, fill=text_rgb)
+        text_y += int(font_size * line_spacing)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _wrap_fixed_width(text: str, width: int) -> List[str]:
+    """Hard-wrap a string into chunks of exactly ``width`` chars.
+
+    Used for code where any character (including whitespace) is meaningful, so
+    word-wrapping is wrong. Keeps source verbatim.
+    """
+    if width <= 0:
+        return [text]
+    return [text[i:i + width] for i in range(0, len(text), width)] or [""]
+
+
 def build_mockup(brand: Brand, concept: Concept, design: Design, *,
                  dry_run: bool = False,
                  backend: Optional[str] = None) -> Design:
@@ -66,6 +158,21 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
         backend=backend, text_color=_to_hex(design.text_color),
         shirt_color=_to_hex(design.shirt_color), dry_run=dry_run,
     )
+
+    # If the concept declared a text overlay, paint it onto every variant
+    # BEFORE judging so the judge sees the final design. Used for concepts
+    # whose art carries verbatim code/long-text that image models can't
+    # render accurately (e.g. brainfuck source).
+    overlay = (concept.extra or {}).get("text_overlay") if hasattr(concept, "extra") else None
+    if overlay and isinstance(overlay, dict) and overlay.get("text"):
+        kwargs: Dict[str, Any] = {"text": overlay["text"]}
+        if "region" in overlay:
+            kwargs["region"] = tuple(overlay["region"])
+        for k in ("panel_color", "border_color", "text_color",
+                  "border_width", "padding", "line_spacing"):
+            if k in overlay:
+                kwargs[k] = overlay[k]
+        variants = [overlay_text_panel(v, **kwargs) for v in variants]
 
     # Rank variants — Claude vision judge first, OCR fallback.
     judge_ranked = judge.rank_variants(variants, design.design_text, brand_voice=brand.voice)
