@@ -39,12 +39,21 @@ def select_backend() -> str:
     pref = os.getenv("EMPIRE_IMAGE_BACKEND", "").lower()
     if pref:
         return pref
+    # Local-first, cheap, high-quality defaults per user request:
+    # 1. Kie.ai (FLUX) if KIEAI_API_KEY present
+    # 2. OpenRouter (multi-model, including image-capable) if OPENROUTER_API_KEY
+    # 3. OpenAI (gpt-image-1)
+    # 4. ComfyUI (local)
+    # 5. placeholder
     if os.getenv("KIEAI_API_KEY"):
         return "kieai"
+    if os.getenv("OPENROUTER_API_KEY"):
+        return "openrouter"
     if os.getenv("OPENAI_API_KEY"):
         return "openai"
     if os.getenv("COMFYUI_URL") or os.getenv("COMFYUI_URLS"):
         return "comfyui"
+    # Future: if os.getenv("OLLAMA_URL"): return "ollama"
     return "placeholder"
 
 
@@ -86,6 +95,19 @@ def generate_design_variants(design_text: str, design_prompt: str, *,
         try:
             imgs = _kieai_images(design_prompt, size)
             return imgs, "kieai"
+        except Exception:
+            return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
+    if backend == "openrouter":
+        try:
+            imgs = _openrouter_images(design_prompt, size)
+            return imgs, "openrouter"
+        except Exception:
+            return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
+    # ollama stub (local inference later)
+    if backend == "ollama":
+        try:
+            imgs = _ollama_images(design_prompt, size)
+            return imgs, "ollama"
         except Exception:
             return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
     return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder"
@@ -208,6 +230,109 @@ def _openai_image(prompt: str, size: Tuple[int, int]) -> bytes:
         body = json.loads(resp.read().decode("utf-8"))
     b64 = body["data"][0]["b64_json"]
     return base64.b64decode(b64)
+
+
+# ---------- Image editing (instruction-based img2img) ----------
+def select_edit_backend() -> Optional[str]:
+    """Which backend can EDIT an existing image given a text instruction.
+
+    Distinct from select_backend(): most text-to-image models (flux-schnell)
+    cannot take a source image. Returns None when no edit-capable backend is
+    configured (caller should then keep the original art).
+    """
+    pref = os.getenv("EMPIRE_EDIT_BACKEND", "").lower()
+    if pref:
+        return pref or None
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    if os.getenv("KIEAI_API_KEY"):
+        return "kieai"
+    return None
+
+
+def edit_design_png(source_png: bytes, instruction: str, *,
+                    backend: Optional[str] = None,
+                    size: Tuple[int, int] = (1024, 1024),
+                    dry_run: bool = False) -> Tuple[Optional[bytes], str]:
+    """Edit ``source_png`` per ``instruction``. Returns (png_bytes|None, source).
+
+    None means no edit backend was available; the caller should keep the
+    original art (or fall back to a deterministic overlay).
+    """
+    backend = (backend or select_edit_backend() or "").lower()
+    if dry_run:
+        return source_png, "edit-dryrun-noop"
+    if not backend:
+        return None, "no-edit-backend"
+    if backend == "openai":
+        try:
+            return _openai_edit_image(source_png, instruction, size), "openai-edit"
+        except Exception as exc:
+            return None, f"openai-edit-failed:{exc}"[:160]
+    if backend == "kieai":
+        try:
+            return _kieai_edit_image(source_png, instruction, size), "kieai-edit"
+        except Exception as exc:
+            return None, f"kieai-edit-failed:{exc}"[:160]
+    return None, f"unknown-edit-backend:{backend}"
+
+
+def _openai_edit_image(source_png: bytes, instruction: str,
+                       size: Tuple[int, int]) -> bytes:
+    """POST multipart/form-data to OpenAI /v1/images/edits with gpt-image-1."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set")
+    model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1")
+    w, h = size
+    osize = "1024x1024"
+    if w > h:
+        osize = "1536x1024"
+    elif h > w:
+        osize = "1024x1536"
+    fields = {"model": model, "prompt": instruction, "size": osize}
+    bg = os.getenv("OPENAI_IMAGE_BACKGROUND", "").strip()
+    if bg:
+        fields["background"] = bg
+    files = [("image", "source.png", source_png, "image/png")]
+    body, content_type = _multipart_encode(fields, files)
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/images/edits",
+        data=body,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": content_type},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"OpenAI edits {e.code}: {e.read().decode(errors='replace')[:300]}") from e
+    return base64.b64decode(payload["data"][0]["b64_json"])
+
+
+def _multipart_encode(fields: dict, files: list) -> Tuple[bytes, str]:
+    """Minimal multipart/form-data encoder. files = [(name, filename, bytes, mime)]."""
+    boundary = "----teeempire" + uuid.uuid4().hex
+    buf = BytesIO()
+    for name, value in fields.items():
+        buf.write(f"--{boundary}\r\n".encode())
+        buf.write(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+        buf.write(f"{value}\r\n".encode())
+    for name, filename, content, mime in files:
+        buf.write(f"--{boundary}\r\n".encode())
+        buf.write(f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode())
+        buf.write(f"Content-Type: {mime}\r\n\r\n".encode())
+        buf.write(content)
+        buf.write(b"\r\n")
+    buf.write(f"--{boundary}--\r\n".encode())
+    return buf.getvalue(), f"multipart/form-data; boundary={boundary}"
+
+
+def _kieai_edit_image(source_png: bytes, instruction: str,
+                      size: Tuple[int, int]) -> bytes:
+    """Edit via Kie.ai flux-kontext (instruction + input image). Placeholder for
+    future use; raises so callers fall back when KIEAI editing isn't wired."""
+    raise RuntimeError("kieai edit path not implemented; use EMPIRE_EDIT_BACKEND=openai")
 
 
 # ---------- ComfyUI ----------
@@ -370,6 +495,76 @@ def _comfy_fetch_image(base: str, img_meta: dict) -> bytes:
         return resp.read()
 
 
+# ---------- OpenRouter (default fallback after Kie.ai) ----------
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+
+def _openrouter_images(prompt: str, size: Tuple[int, int]) -> List[bytes]:
+    """OpenRouter image generation (OpenAI-compatible /images/generations for supported models).
+    Uses OPENROUTER_API_KEY. Model via OPENROUTER_IMAGE_MODEL (default: a fast FLUX or SD3 variant).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY not set")
+    model = os.getenv("OPENROUTER_IMAGE_MODEL", "black-forest-labs/flux-schnell")
+    n = int(os.getenv("EMPIRE_OPENROUTER_VARIANTS", os.getenv("EMPIRE_COMFY_VARIANTS", "3")))
+    out: List[bytes] = []
+    errors: List[Exception] = []
+    def one(_: int) -> bytes:
+        w, h = size
+        closest = "1024x1024"
+        if w > h: closest = "1536x1024"
+        elif h > w: closest = "1024x1536"
+        augmented = (
+            f"{prompt}\n\n"
+            "Output: clean print-ready graphic on transparent background. "
+            "No mockup, no shirt, no watermark, no extra text unless in prompt."
+        )
+        payload = {
+            "model": model,
+            "prompt": augmented,
+            "size": closest,
+            "n": 1,
+            "response_format": "b64_json",
+        }
+        req = urllib.request.Request(
+            f"{OPENROUTER_API_BASE}/images/generations",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://tee-empire.local",
+                "X-Title": "tee-empire",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        b64 = body["data"][0]["b64_json"]
+        return base64.b64decode(b64)
+    with ThreadPoolExecutor(max_workers=min(n, 4)) as pool:
+        futures = [pool.submit(one, i) for i in range(n)]
+        for fut in as_completed(futures):
+            try:
+                out.append(fut.result())
+            except Exception as e:
+                errors.append(e)
+    if not out:
+        raise errors[0] if errors else RuntimeError("OpenRouter returned no images")
+    return out
+
+
+# ---------- Ollama (stub for local inference; wire /api/generate or image endpoints later) ----------
+def _ollama_images(prompt: str, size: Tuple[int, int]) -> List[bytes]:
+    """Stub. Set OLLAMA_URL=http://localhost:11434 and implement a real caller.
+    For now raises to force fallback to placeholder (or another backend).
+    """
+    base = os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+    # TODO: call {base}/api/generate or a vision/image model endpoint.
+    # Example future: use a model that supports image out, or txt2img via ollama + external.
+    raise RuntimeError("ollama image backend not implemented yet (set EMPIRE_IMAGE_BACKEND=kieai or openrouter for now)")
+
+
 # ---------- Kie.AI ----------
 KIEAI_API_BASE = "https://api.kie.ai/api/v1"
 
@@ -423,13 +618,14 @@ def _kieai_http_call(method: str, url: str, body: Optional[bytes] = None,
         if status >= 400:
             raise RuntimeError(f"HTTP {status}: {body_out.decode(errors='replace')[:300]}")
         return body_out
-    # Direct path (no SSH proxy)
+    # Direct path (no SSH proxy) -- preferred for local hosting
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             return resp.read()
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"HTTP {e.code}: {e.read().decode()[:300]}") from e
+    # Note: EMPIRE_KIEAI_VIA_SSH remains for rare air-gapped cases; not needed for normal local use.
 
 
 def _kieai_images(prompt: str, size: Tuple[int, int]) -> List[bytes]:

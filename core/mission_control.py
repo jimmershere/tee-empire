@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from . import designs as designs_mod
 from .models import Brand, Concept, Design
 from .store import Store
 
@@ -128,6 +129,7 @@ def _item_for_pending(brand_slug: str, concept, design, listing, asset_map: dict
     rationale = ""
     if design.design_notes and "[judge]" in design.design_notes:
         rationale = design.design_notes.split("[judge]", 1)[1].strip()
+    extra = listing.extra or {}
     return {
         "slug": concept.slug,
         "brand": brand_slug,
@@ -142,6 +144,8 @@ def _item_for_pending(brand_slug: str, concept, design, listing, asset_map: dict
         "external_id": listing.external_id,
         "state": listing.state,
         "url": listing.url or "",
+        "product": extra.get("product", ""),
+        "product_label": extra.get("product_label", ""),
     }
 
 
@@ -200,25 +204,33 @@ def _ensure_remote_dir() -> None:
 
 def _render_html(designs: list, asset_map: dict) -> str:
     rows_html: List[str] = []
+    # Build the add-text font dropdown once, grouped by category, from the
+    # fonts actually installed + loadable on this machine.
+    _groups: dict = {}
+    for f in designs_mod.available_text_fonts():
+        _groups.setdefault(f["category"], []).append(f)
+    font_opts = "".join(
+        '<optgroup label="{}">{}</optgroup>'.format(
+            html.escape(cat),
+            "".join('<option value="{}">{}</option>'.format(html.escape(f["key"]), html.escape(f["label"]))
+                    for f in items))
+        for cat, items in _groups.items()
+    )
     for brand_slug, concept, design, listing in designs:
         slug = concept.slug
         am = asset_map.get(slug, {})
         primary = am.get("primary", "")
         variants = am.get("variants", [])
+        is_pending = primary.endswith("_placeholder.png")
         listing_link = listing.url or ""
-        listing_state = listing.state
-        score_pct = int(round((design.ocr_score or 0) * 100))
-        rationale = ""
-        if design.design_notes and "[judge]" in design.design_notes:
-            rationale = design.design_notes.split("[judge]", 1)[1].strip()
-        # Build alternate thumbnails inline (clickable to swap primary).
+        # Build alternate thumbnails inline (clickable to swap primary). Hidden
+        # while the card is still on its rendering placeholder.
         alts_inline = ""
-        if len(variants) > 1:
+        if not is_pending and len(variants) > 1:
             thumbs = []
             for i, vname in enumerate(variants):
                 if vname == primary:
                     continue
-                # Map filename → swap_v1/2/3 decision based on suffix.
                 if "__v1." in vname:
                     swap = "swap_v1"
                 elif "__v2." in vname:
@@ -236,26 +248,68 @@ def _render_html(designs: list, asset_map: dict) -> str:
                        if swap else "")
                     + f'</div>'
                 )
-            alts_inline = '<div class="alts-grid">' + "".join(thumbs) + "</div>"
+            alts_inline = ('<div class="alts-wrap"><span class="alts-label">Other colors</span>'
+                           '<div class="alts-grid">' + "".join(thumbs) + "</div></div>")
+        extra = listing.extra or {}
+        product_label = extra.get("product_label", "") or extra.get("product", "")
+        prod_html = (f'<span class="prod-tag">{html.escape(product_label)}</span>'
+                     if product_label else "")
+        esc_slug = html.escape(slug)
+        product_key = (extra.get("product") or "").lower()
+        # Placement options are filtered to what the blueprint actually supports.
+        # Only the tees (front/back/sleeves/neck) have secondary print areas; mugs,
+        # stickers and posters are single-area, so text can only stack on the face.
+        if product_key in ("tee", "tshirt", "shirt", "tiedye"):
+            placements = [("back", "Back"), ("left_sleeve", "Left sleeve"),
+                          ("right_sleeve", "Right sleeve"), ("neck", "Neck label"),
+                          ("underneath", "Underneath (front)")]
+        else:
+            placements = [("underneath", "On front (lower)")]
+        placement_opts = "".join(f'<option value="{v}">{l}</option>' for v, l in placements)
+        color_opts = ('<option value="white">White</option>'
+                      '<option value="black">Black</option>'
+                      '<option value="red">Red</option>'
+                      '<option value="navy">Navy</option>'
+                      '<option value="gold">Gold</option>'
+                      '<option value="grey">Grey</option>')
+        pending_badge = '<span class="badge rendering">⏳ rendering…</span>' if is_pending else ""
         rows_html.append(textwrap.dedent(f"""\
-            <article class="card" data-slug="{html.escape(slug)}">
+            <article class="card{' is-pending' if is_pending else ''}" data-slug="{html.escape(slug)}">
               <a href="{html.escape(primary)}" target="_blank" class="thumb-link">
-                <img class="thumb" src="{html.escape(primary)}" alt="{html.escape(concept.product_title)}">
+                <img class="thumb" src="{html.escape(primary)}" alt="{html.escape(concept.product_title)}" loading="lazy">
+                {pending_badge}
               </a>
               <div class="meta">
+                <div class="tagrow">{prod_html}<span class="brand-chip">{html.escape(brand_slug)}</span></div>
                 <h3>{html.escape(concept.product_title)}</h3>
-                <p class="brand">{html.escape(brand_slug)} · {html.escape(concept.lane)} · {html.escape(listing_state)}</p>
                 <p class="tagline">{html.escape(concept.tagline)}</p>
-                <p class="judge">judge: {score_pct}% · {html.escape(rationale or '—')}</p>
                 <div class="row decide-row">
-                  <button class="btn primary" data-decision="approve" data-slug="{html.escape(slug)}">✅ APPROVE</button>
-                  <button class="btn reject" data-decision="reject" data-slug="{html.escape(slug)}">❌ REJECT</button>
+                  <button class="btn approve" data-decision="approve" data-slug="{html.escape(slug)}">✓ Approve</button>
+                  <button class="btn reject" data-decision="reject" data-slug="{html.escape(slug)}">✕ Reject</button>
                 </div>
-                <p class="status-line" data-status-for="{html.escape(slug)}"></p>
+                <div class="addtext-row">
+                  <input class="addtext-input" type="text" data-refine-for="{esc_slug}"
+                         placeholder="Add text — e.g. add &quot;Est. 2024&quot; under the art">
+                  <button class="btn addtext-go" data-refine-slug="{esc_slug}">＋ ADD-TEXT</button>
+                </div>
+                <details class="exact">
+                  <summary>Exact text · pick font, color &amp; placement</summary>
+                  <div class="exact-body">
+                    <input class="at-text" type="text" data-at-text="{esc_slug}"
+                           placeholder="Words to print (e.g. FULLY BAKED)">
+                    <div class="at-row">
+                      <select class="at-font" data-at-font="{esc_slug}" title="Font">{font_opts}</select>
+                      <select class="at-color" data-at-color="{esc_slug}" title="Color">{color_opts}</select>
+                      <select class="at-place" data-at-place="{esc_slug}" title="Placement">{placement_opts}</select>
+                    </div>
+                    <button class="btn stamp-btn" data-addtext-slug="{esc_slug}">Stamp exact text</button>
+                  </div>
+                </details>
+                <p class="status-line" data-status-for="{esc_slug}"></p>
                 {alts_inline}
                 <div class="row footer-row">
-                  <a class="btn" href="{html.escape(primary)}" target="_blank">Open full</a>
-                  {f'<a class="btn" href="{html.escape(listing_link)}" target="_blank">Printify</a>' if listing_link else ''}
+                  <a class="link" href="{html.escape(primary)}" target="_blank">Open full image</a>
+                  {f'<a class="link" href="{html.escape(listing_link)}" target="_blank">View on Printify ↗</a>' if listing_link else ''}
                 </div>
               </div>
             </article>
@@ -268,66 +322,115 @@ def _render_html(designs: list, asset_map: dict) -> str:
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <title>Empire — Best Picks</title>
           <style>
+            :root {
+              --bg: #0e1014; --panel: #171a21; --panel-2: #1d212a;
+              --line: rgba(255,255,255,.09); --text: #eef1f6; --muted: #9aa3b2;
+              --accent: #5b8cff; --accent-soft: rgba(91,140,255,.16);
+              --green: #34c77b; --red: #ff6b6b;
+            }
             * { box-sizing: border-box; margin: 0; padding: 0; }
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                   background: #0a0a0a; color: #eee; padding: 32px; }
-            header { display: flex; align-items: baseline; justify-content: space-between;
-                     margin-bottom: 24px; padding-bottom: 16px;
-                     border-bottom: 1px solid rgba(255,255,255,.08); }
-            h1 { font-size: 22px; letter-spacing: -.5px; }
-            .meta-stamp { font-size: 12px; opacity: .5; }
-            .grid { display: grid; gap: 24px;
-                    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
-            .card { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
-                    border-radius: 16px; overflow: hidden;
-                    transition: transform .15s ease, border-color .15s ease; }
-            .card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,.2); }
-            .thumb-link { display: block; background: #1a1a1a; }
-            .thumb { width: 100%; height: 320px; object-fit: contain; display: block; }
-            .meta { padding: 16px 18px 18px; }
-            .meta h3 { font-size: 15px; margin-bottom: 4px; font-weight: 600; }
-            .brand { font-size: 11px; opacity: .55; text-transform: uppercase;
-                     letter-spacing: .8px; margin-bottom: 8px; }
-            .tagline { font-size: 13px; opacity: .8; margin-bottom: 10px; line-height: 1.4; }
-            .judge { font-size: 12px; opacity: .65; line-height: 1.4; margin-bottom: 10px;
-                     font-style: italic; }
-            .alts { font-size: 12px; opacity: .6; margin-bottom: 10px; }
-            .alt { color: #6cf; text-decoration: none; margin-right: 4px; }
-            .alt:hover { text-decoration: underline; }
-            .row { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
-            .decide-row { margin: 8px 0 4px; }
-            .footer-row { margin-top: 12px; padding-top: 10px;
-                          border-top: 1px solid rgba(255,255,255,.06); }
-            .btn { display: inline-block; padding: 8px 14px; font-size: 12px;
-                   border-radius: 8px; text-decoration: none; color: #ccc;
-                   background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
-                   cursor: pointer; font-family: inherit; }
-            .btn.primary { color: #0a0a0a; background: #6cf; border-color: #6cf; }
-            .btn.reject { color: #f88; border-color: rgba(255,100,100,.3); }
-            .btn:hover { background: rgba(255,255,255,.12); }
-            .btn.primary:hover { background: #8df; }
-            .btn.reject:hover { background: rgba(255,100,100,.15); }
-            .btn:disabled { opacity: .4; cursor: not-allowed; }
-            .status-line { font-size: 12px; min-height: 16px; margin: 6px 0;
-                           color: #6cf; font-weight: 500; }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                   background: radial-gradient(1200px 600px at 50% -200px, #1a1f2b, var(--bg)) fixed;
+                   color: var(--text); padding: 28px clamp(16px,4vw,40px); }
+            header { display: flex; align-items: center; justify-content: space-between;
+                     gap: 16px; margin-bottom: 26px; }
+            .brandmark { display: flex; align-items: center; gap: 12px; }
+            .dot { width: 11px; height: 11px; border-radius: 50%;
+                   background: var(--green); box-shadow: 0 0 12px var(--green); }
+            h1 { font-size: 21px; font-weight: 700; letter-spacing: -.4px; }
+            h1 small { display: block; font-size: 12px; font-weight: 500;
+                       color: var(--muted); letter-spacing: 0; margin-top: 2px; }
+            .meta-stamp { font-size: 12px; color: var(--muted); text-align: right; }
+            .grid { display: grid; gap: 22px;
+                    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+            .card { background: var(--panel); border: 1px solid var(--line);
+                    border-radius: 18px; overflow: hidden; display: flex; flex-direction: column;
+                    box-shadow: 0 8px 30px rgba(0,0,0,.25);
+                    transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+            .card:hover { transform: translateY(-3px); border-color: rgba(255,255,255,.22);
+                          box-shadow: 0 14px 40px rgba(0,0,0,.4); }
+            .thumb-link { position: relative; display: block; background: #0c0e12; }
+            .thumb { width: 100%; height: 300px; object-fit: contain; display: block; }
+            .badge { position: absolute; top: 10px; left: 10px; font-size: 11px;
+                     font-weight: 600; padding: 5px 10px; border-radius: 999px;
+                     background: rgba(0,0,0,.6); color: #cfd6e4; backdrop-filter: blur(4px); }
+            .badge.rendering { color: #ffd98a; }
+            .is-pending .thumb { animation: pulse 1.6s ease-in-out infinite; }
+            @keyframes pulse { 0%,100% { opacity: .55; } 50% { opacity: .9; } }
+            .meta { padding: 15px 17px 17px; display: flex; flex-direction: column; gap: 9px; flex: 1; }
+            .tagrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+            .prod-tag { font-size: 11px; font-weight: 700; color: var(--accent);
+                        background: var(--accent-soft); padding: 3px 9px; border-radius: 999px; }
+            .brand-chip { font-size: 10px; letter-spacing: .6px; text-transform: uppercase;
+                          color: var(--muted); }
+            .meta h3 { font-size: 15.5px; font-weight: 650; line-height: 1.3; }
+            .tagline { font-size: 13px; color: var(--muted); line-height: 1.45; }
+            .row { display: flex; gap: 8px; flex-wrap: wrap; }
+            .decide-row { margin-top: 2px; }
+            .decide-row .btn { flex: 1; }
+            .btn { display: inline-flex; align-items: center; justify-content: center;
+                   padding: 10px 14px; font-size: 13px; font-weight: 600; border-radius: 10px;
+                   text-decoration: none; color: var(--text); cursor: pointer; font-family: inherit;
+                   background: var(--panel-2); border: 1px solid var(--line); transition: all .12s ease; }
+            .btn:hover { background: rgba(255,255,255,.09); }
+            .btn:disabled { opacity: .45; cursor: not-allowed; }
+            .btn.approve { color: #06301c; background: var(--green); border-color: var(--green); }
+            .btn.approve:hover { filter: brightness(1.08); }
+            .btn.reject { color: var(--red); border-color: rgba(255,107,107,.4); background: rgba(255,107,107,.08); }
+            .btn.reject:hover { background: rgba(255,107,107,.16); }
+            .addtext-row { display: flex; gap: 7px; }
+            .addtext-input { flex: 1; min-width: 0; padding: 9px 11px; font-size: 12.5px;
+                             border-radius: 10px; background: var(--panel-2);
+                             border: 1px solid var(--line); color: var(--text); font-family: inherit; }
+            .addtext-input::placeholder { color: #6b7488; }
+            .addtext-input:focus { outline: none; border-color: var(--accent); }
+            .btn.addtext-go { white-space: nowrap; color: var(--accent);
+                              border-color: rgba(91,140,255,.45); background: var(--accent-soft); }
+            .btn.addtext-go:hover { background: rgba(91,140,255,.28); }
+            .exact { border: 1px solid var(--line); border-radius: 10px;
+                     background: rgba(255,255,255,.02); }
+            .exact summary { cursor: pointer; font-size: 12px; padding: 9px 12px;
+                             color: var(--muted); list-style: none; }
+            .exact summary::-webkit-details-marker { display: none; }
+            .exact summary::before { content: "▸ "; color: var(--accent); }
+            .exact[open] summary::before { content: "▾ "; }
+            .exact[open] summary { color: var(--text); }
+            .exact-body { display: flex; flex-direction: column; gap: 7px; padding: 0 12px 12px; }
+            .at-row { display: flex; gap: 6px; }
+            .at-text, .at-row select { padding: 8px 9px; font-size: 12px; border-radius: 9px;
+                            background: var(--panel-2); border: 1px solid var(--line);
+                            color: var(--text); font-family: inherit; }
+            .at-row select { flex: 1; min-width: 0; }
+            .at-text:focus, .at-row select:focus { outline: none; border-color: var(--accent); }
+            .btn.stamp-btn { align-self: flex-start; color: var(--accent);
+                             border-color: rgba(91,140,255,.35); }
+            .status-line { font-size: 12px; min-height: 15px; color: var(--accent); font-weight: 500; }
+            .alts-wrap { border-top: 1px solid var(--line); padding-top: 11px; }
+            .alts-label { font-size: 10px; letter-spacing: .6px; text-transform: uppercase;
+                          color: var(--muted); }
             .alts-grid { display: grid; grid-template-columns: repeat(3, 1fr);
-                         gap: 8px; margin-top: 10px; }
+                         gap: 8px; margin-top: 8px; }
             .alt-cell { display: flex; flex-direction: column; gap: 4px; align-items: center; }
-            .alt-thumb { width: 100%; height: 80px; object-fit: contain;
-                         background: #1a1a1a; border-radius: 6px;
-                         border: 1px solid rgba(255,255,255,.08); display: block; }
-            .alt-pick { font-size: 10px; padding: 4px 6px; background: rgba(255,255,255,.05);
-                        color: #ccc; border: 1px solid rgba(255,255,255,.1);
-                        border-radius: 5px; cursor: pointer; width: 100%;
-                        font-family: inherit; }
-            .alt-pick:hover { background: rgba(108,200,255,.15); color: #6cf; }
-            .empty { text-align: center; opacity: .5; padding: 60px; }
+            .alt-thumb { width: 100%; height: 76px; object-fit: contain; background: #0c0e12;
+                         border-radius: 8px; border: 1px solid var(--line); display: block; }
+            .alt-pick { font-size: 10px; padding: 5px 6px; background: var(--panel-2);
+                        color: var(--muted); border: 1px solid var(--line);
+                        border-radius: 6px; cursor: pointer; width: 100%; font-family: inherit; }
+            .alt-pick:hover { background: var(--accent-soft); color: var(--accent); }
+            .footer-row { margin-top: auto; padding-top: 11px; border-top: 1px solid var(--line);
+                          gap: 16px; }
+            .link { font-size: 12px; color: var(--accent); text-decoration: none; }
+            .link:hover { text-decoration: underline; }
+            .empty { text-align: center; color: var(--muted); padding: 80px 20px; font-size: 14px; }
           </style>
         </head>
         <body>
           <header>
-            <h1>TeeEmpire · Best Picks</h1>
-            <span class="meta-stamp">$count items · refreshed $stamp</span>
+            <div class="brandmark">
+              <span class="dot"></span>
+              <h1>TeeEmpire <small>Best Picks · approve, reject or add text</small></h1>
+            </div>
+            <span class="meta-stamp">$count items<br>refreshed $stamp</span>
           </header>
           $body
           <script>
@@ -358,6 +461,69 @@ def _render_html(designs: list, asset_map: dict) -> str:
               }
             }
 
+            async function refine(btn) {
+              const slug = btn.dataset.refineSlug;
+              const input = document.querySelector(`[data-refine-for="${slug}"]`);
+              const note = (input && input.value || '').trim();
+              const statusEl = document.querySelector(`[data-status-for="${slug}"]`);
+              if (!note) { statusEl.textContent = 'enter a refine instruction first'; return; }
+              const card = btn.closest('.card');
+              btn.disabled = true;
+              statusEl.textContent = '…sending refine';
+              try {
+                const r = await fetch('/api/empire/decide', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ slug, decision: 'refine', note }),
+                });
+                const data = await r.json();
+                if (data.ok) {
+                  statusEl.textContent = `✓ refine queued: "${note}" — will apply on next poll`;
+                  if (input) input.value = '';
+                } else {
+                  statusEl.textContent = `error: ${data.error || 'unknown'}`;
+                }
+              } catch (e) {
+                statusEl.textContent = `network error: ${e.message}`;
+              } finally {
+                btn.disabled = false;
+              }
+            }
+
+            async function addtext(btn) {
+              const slug = btn.dataset.addtextSlug;
+              const q = (k) => document.querySelector(`[data-${k}="${slug}"]`);
+              const text = ((q('at-text') || {}).value || '').trim();
+              const statusEl = document.querySelector(`[data-status-for="${slug}"]`);
+              if (!text) { if (statusEl) statusEl.textContent = 'enter text to print first'; return; }
+              const spec = {
+                text,
+                font: (q('at-font') || {}).value || 'bold_sans',
+                color: (q('at-color') || {}).value || 'white',
+                placement: (q('at-place') || {}).value || 'back',
+              };
+              btn.disabled = true;
+              if (statusEl) statusEl.textContent = '…queuing add-text';
+              try {
+                const r = await fetch('/api/empire/decide', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ slug, decision: 'addtext', note: JSON.stringify(spec) }),
+                });
+                const data = await r.json();
+                if (data.ok) {
+                  if (statusEl) statusEl.textContent = `✓ text "${text}" → ${spec.placement} queued — applies on next poll`;
+                  const ti = q('at-text'); if (ti) ti.value = '';
+                } else if (statusEl) {
+                  statusEl.textContent = `error: ${data.error || 'unknown'}`;
+                }
+              } catch (e) {
+                if (statusEl) statusEl.textContent = `network error: ${e.message}`;
+              } finally {
+                btn.disabled = false;
+              }
+            }
+
             // Hydrate latest decisions on page load.
             (async () => {
               try {
@@ -377,6 +543,14 @@ def _render_html(designs: list, asset_map: dict) -> str:
             // Wire all decision buttons.
             document.querySelectorAll('button[data-decision]').forEach(b => {
               b.addEventListener('click', () => decide(b));
+            });
+            // Wire refine buttons.
+            document.querySelectorAll('button[data-refine-slug]').forEach(b => {
+              b.addEventListener('click', () => refine(b));
+            });
+            // Wire add-text buttons.
+            document.querySelectorAll('button[data-addtext-slug]').forEach(b => {
+              b.addEventListener('click', () => addtext(b));
             });
           </script>
         </body></html>

@@ -70,7 +70,8 @@ class Orchestrator:
         return out
 
     # -------- step 2: design --------
-    def design(self, brand: Brand, concept_slugs: Optional[List[str]] = None) -> List[Design]:
+    def design(self, brand: Brand, concept_slugs: Optional[List[str]] = None,
+               product_type: Optional[str] = None) -> List[Design]:
         if concept_slugs is None:
             concepts = self.store.list_concepts(brand=brand.slug)
         else:
@@ -79,17 +80,25 @@ class Orchestrator:
         for c in concepts:
             existing = self.store.get_design(brand.slug, c.slug)
             d = existing or designs_mod.design_from_concept(brand, c)
-            d = designs_mod.build_mockup(brand, c, d, dry_run=self.dry_run)
+            # Pass product_type through for multi-product mockups (shirt/mug/sticker/poster)
+            d = designs_mod.build_mockup(brand, c, d, dry_run=self.dry_run, product_type=product_type)
+            # Persist product_type hint for later listing/shipping
+            if product_type:
+                d.extra = getattr(d, "extra", {}) or {}
+                d.extra["product_type"] = product_type
             self.store.upsert_design(d)
             out.append(d)
         return out
 
     # -------- step 3: list --------
     def list_to_printify(self, brand: Brand, concept_slugs: Optional[List[str]] = None,
-                         blueprint_id: Optional[int] = None,
-                         variant_ids: Optional[List[int]] = None,
-                         print_provider_id: Optional[int] = None) -> List[Listing]:
+                          blueprint_id: Optional[int] = None,
+                          variant_ids: Optional[List[int]] = None,
+                          print_provider_id: Optional[int] = None,
+                          product_type: Optional[str] = None) -> List[Listing]:
         client = printify_mod.PrintifyClient(shop_id=brand.printify_shop_id)
+        # Support multi-product via explicit product_type or stored on design/listing
+        pt = product_type
         blueprint_id = blueprint_id or brand.printify_blueprint_id
         print_provider_id = print_provider_id or brand.printify_print_provider_id
         variant_ids = variant_ids or brand.printify_variant_ids or [1]
@@ -100,12 +109,13 @@ class Orchestrator:
             design = self.store.get_design(brand.slug, c.slug)
             if not design or not design.mockup_path:
                 continue
+            # Resolve per-concept product_type (from design extra or listing hint)
+            if not pt:
+                pt = (getattr(design, "extra", None) or {}).get("product_type") if hasattr(design, "extra") else None
             try:
                 image_bytes = Path(design.mockup_path).read_bytes()
                 upload = client.upload_image(f"{c.slug}.png", image_bytes, dry_run=self.dry_run)
                 image_id = upload.get("id") or upload.get("synthetic_id") or "dryrun-image"
-                # Marketplace API rejects some Unicode (subscripts, superscripts).
-                # Sanitize for the listing while keeping originals on the design itself.
                 listing_title = util.sanitize_for_marketplace(c.product_title)
                 listing_tags = [util.sanitize_for_marketplace(t) for t in c.tags]
                 description = util.sanitize_for_marketplace(
@@ -113,26 +123,29 @@ class Orchestrator:
                     f"Design brief: {c.design_prompt}\n\n"
                     f"Colors: {', '.join(c.suggested_colors)}"
                 )
+                # Let PrintifyClient pick blueprint by product_type when not explicitly passed
                 created = client.create_product(
                     title=listing_title, description=description,
                     blueprint_id=blueprint_id, variant_ids=variant_ids,
                     image_id=image_id, print_provider_id=print_provider_id,
                     tags=listing_tags, price_cents=price_cents, dry_run=self.dry_run,
+                    product_type=pt,
                 )
                 external_id = str(created.get("id") or f"dryrun-{c.slug}")
+                extra = {"blueprint_id": blueprint_id, "variant_ids": variant_ids,
+                         "print_provider_id": print_provider_id, "upload": upload,
+                         "create_response": created}
+                if pt:
+                    extra["product_type"] = pt
                 listing = Listing(
                     brand=brand.slug, concept_slug=c.slug, platform="printify",
                     external_id=external_id, state="pending_review",
                     title=listing_title, description=description,
-                    extra={"blueprint_id": blueprint_id, "variant_ids": variant_ids,
-                           "print_provider_id": print_provider_id, "upload": upload,
-                           "create_response": created},
+                    extra=extra,
                 )
                 self.store.upsert_listing(listing)
                 results.append(listing)
             except Exception as exc:
-                # Persist the failure so it shows up in `empire status` / `mc-publish`
-                # instead of being lost as an in-memory artifact only.
                 err_listing = Listing(
                     brand=brand.slug, concept_slug=c.slug, platform="printify",
                     external_id=f"error-{c.slug}-{int(time.time())}",
@@ -149,7 +162,8 @@ class Orchestrator:
         return results
 
     def list_to_etsy(self, brand: Brand, concept_slugs: Optional[List[str]] = None,
-                     price_usd: float = 24.0) -> List[Listing]:
+                      price_usd: float = 24.0,
+                      product_type: Optional[str] = None) -> List[Listing]:
         client = etsy_mod.EtsyClient(shop_id=brand.etsy_shop_id)
         concepts = self._select_concepts(brand, concept_slugs)
         results: List[Listing] = []
@@ -157,14 +171,19 @@ class Orchestrator:
             design = self.store.get_design(brand.slug, c.slug)
             if not design or not design.mockup_path:
                 continue
+            pt = product_type or ((getattr(design, "extra", None) or {}).get("product_type") if hasattr(design, "extra") else None) or "shirt"
             try:
                 listing_title = util.sanitize_for_marketplace(c.product_title)
                 listing_tags = [util.sanitize_for_marketplace(t) for t in c.tags]
+                # Generic POD description; Printify channel will often be the real source of truth for variants/images
+                prod_desc = {
+                    "shirt": "Made-to-order soft tee. Bella+Canvas 3001 unisex jersey. Ships fast.",
+                    "mug": "15oz ceramic mug. Dishwasher & microwave safe. Made-to-order.",
+                    "sticker": "High-quality vinyl sticker. Weather resistant. Made-to-order.",
+                    "poster": "Museum-quality poster print on thick matte paper. Made-to-order.",
+                }.get(pt, "Made-to-order POD item. Ships fast.")
                 description = util.sanitize_for_marketplace(
-                    f"{c.tagline}\n\n"
-                    f"{c.product_title}\n\n"
-                    f"Made-to-order. Bella+Canvas 3001 unisex tee. Soft, comfortable, ships fast.\n\n"
-                    f"Colors: {', '.join(c.suggested_colors)}"
+                    f"{c.tagline}\n\n{c.product_title}\n\n{prod_desc}\n\nColors/Material: {', '.join(c.suggested_colors)}"
                 )
                 created = client.create_draft_listing(
                     title=listing_title, description=description, price_usd=price_usd,
@@ -178,12 +197,13 @@ class Orchestrator:
                 if not self.dry_run:
                     client.upload_listing_image(int(listing_id), img_bytes, rank=1,
                                                 dry_run=self.dry_run)
+                extra = {"create_response": created, "product_type": pt}
                 listing = Listing(
                     brand=brand.slug, concept_slug=c.slug, platform="etsy",
                     external_id=listing_id, state="pending_review",
                     title=listing_title, description=description,
                     price_cents=int(round(price_usd * 100)),
-                    extra={"create_response": created},
+                    extra=extra,
                 )
                 self.store.upsert_listing(listing)
                 results.append(listing)
@@ -224,18 +244,19 @@ class Orchestrator:
 
     # -------- full run --------
     def full_run(self, brand: Brand, *, lanes: Optional[List[str]] = None,
-                 per_lane: int = 5, use_api: bool = False,
-                 send_etsy: bool = True, send_printify: bool = True,
-                 send_reviews: bool = True) -> RunReport:
+                  per_lane: int = 5, use_api: bool = False,
+                  send_etsy: bool = True, send_printify: bool = True,
+                  send_reviews: bool = True,
+                  product_type: Optional[str] = None) -> RunReport:
         errors: List[Dict[str, Any]] = []
         planned = self.plan(brand, lanes=lanes, per_lane=per_lane, use_api=use_api)
-        designed = self.design(brand, [c.slug for c in planned])
+        designed = self.design(brand, [c.slug for c in planned], product_type=product_type)
         listed_printify: List[Listing] = []
         listed_etsy: List[Listing] = []
         if send_printify:
-            listed_printify = self.list_to_printify(brand, [c.slug for c in planned])
+            listed_printify = self.list_to_printify(brand, [c.slug for c in planned], product_type=product_type)
         if send_etsy:
-            listed_etsy = self.list_to_etsy(brand, [c.slug for c in planned])
+            listed_etsy = self.list_to_etsy(brand, [c.slug for c in planned], product_type=product_type)
         reviews: List[Dict[str, Any]] = []
         if send_reviews:
             reviews = self.send_reviews(brand, [c.slug for c in planned])
