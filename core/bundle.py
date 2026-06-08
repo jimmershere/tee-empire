@@ -129,6 +129,10 @@ BUNDLE: List[Dict] = [
         "price_cents": 1800,
         "mockup": "mug",
         "description": "15oz ceramic mug. Dishwasher & microwave safe. Made-to-order.",
+        # The 15oz front print area is 2790x1219 (wide). At full scale a square
+        # logo overflows and crops; shrink it into the top ~90% and lift it so
+        # the bottom ~10% stays clear for an underneath text line.
+        "image_transform": {"x": 0.5, "y": 0.45, "scale": 0.39},
     },
     {
         "key": "sticker",

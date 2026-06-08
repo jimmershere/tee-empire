@@ -88,7 +88,8 @@ class PrintifyClient:
                         print_provider_id: int = 1, tags: Optional[List[str]] = None,
                         price_cents: int = 2400,
                         dry_run: bool = False,
-                        product_type: Optional[str] = None) -> Dict[str, Any]:
+                        product_type: Optional[str] = None,
+                        image_transform: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self.shop_id and not dry_run:
             raise PrintifyError("PRINTIFY_SHOP_ID is not configured.")
         variant_ids = list(variant_ids)
@@ -96,10 +97,17 @@ class PrintifyClient:
         eff_blueprint = blueprint_id
         if product_type and not blueprint_id:
             eff_blueprint = PRODUCT_BLUEPRINTS.get(product_type, blueprint_id or 12)
+        # Default: art fills the print area, centered. ``image_transform`` lets a
+        # caller shrink/reposition it per product (e.g. the 15oz mug shrinks the
+        # logo into the top 80% so the bottom 20% stays clear for text).
+        tf: Dict[str, Any] = {"x": 0.5, "y": 0.5, "scale": 1, "angle": 0}
+        if image_transform:
+            tf.update({k: image_transform[k]
+                       for k in ("x", "y", "scale", "angle") if k in image_transform})
         if image_id:
-            image_entry: Dict[str, Any] = {"id": image_id, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}
+            image_entry: Dict[str, Any] = {"id": image_id, **tf}
         elif image_src:
-            image_entry = {"src": image_src, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}
+            image_entry = {"src": image_src, **tf}
         else:
             raise PrintifyError("create_product requires image_id or image_src.")
         # For non-tee products the "front" placeholder name may differ; Printify accepts "front" for most.

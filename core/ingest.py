@@ -307,6 +307,7 @@ def process_drop(job: Dict, *, brand_slug: str = "earl_biggers", dry_run: bool =
                 blueprint_id=spec["blueprint_id"], variant_ids=spec["variant_ids"],
                 image_id=image_id, print_provider_id=spec["print_provider_id"],
                 tags=[], price_cents=spec["price_cents"], dry_run=dry_run,
+                image_transform=spec.get("image_transform"),
             )
             external_id = str(created.get("id") or f"dryrun-{comp_slug}")
             state = "pending_review"
