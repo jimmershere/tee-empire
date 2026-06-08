@@ -15,6 +15,15 @@ STANDARD_UNISEX_TEE_BLUEPRINTS = {
     12: "Bella+Canvas 3001 - Unisex Jersey Short Sleeve Tee",
 }
 
+# Minimal multi-product blueprint map (common Printify catalog IDs; override via brand.yaml or --blueprint).
+# These are starting points — users should verify in their Printify catalog for their providers.
+PRODUCT_BLUEPRINTS = {
+    "shirt": 12,      # Bella+Canvas 3001
+    "mug": 19,        # 11/15oz ceramic mug (common)
+    "sticker": 57,    # Die-cut / kiss-cut sticker (common)
+    "poster": 163,    # Poster / matte print (common starting point)
+}
+
 
 class PrintifyError(RuntimeError):
     pass
@@ -45,7 +54,7 @@ class PrintifyClient:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=90) as resp:
                 body = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -74,24 +83,39 @@ class PrintifyClient:
         return self._request("POST", "/uploads/images.json", payload=payload, dry_run=dry_run)
 
     def create_product(self, title: str, description: str, blueprint_id: int,
-                       variant_ids: Iterable[int], image_id: Optional[str] = None,
-                       image_src: Optional[str] = None,
-                       print_provider_id: int = 1, tags: Optional[List[str]] = None,
-                       price_cents: int = 2400,
-                       dry_run: bool = False) -> Dict[str, Any]:
+                        variant_ids: Iterable[int], image_id: Optional[str] = None,
+                        image_src: Optional[str] = None,
+                        print_provider_id: int = 1, tags: Optional[List[str]] = None,
+                        price_cents: int = 2400,
+                        dry_run: bool = False,
+                        product_type: Optional[str] = None,
+                        image_transform: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if not self.shop_id and not dry_run:
             raise PrintifyError("PRINTIFY_SHOP_ID is not configured.")
         variant_ids = list(variant_ids)
+        # Allow product_type to select a sensible blueprint when caller didn't override blueprint_id
+        eff_blueprint = blueprint_id
+        if product_type and not blueprint_id:
+            eff_blueprint = PRODUCT_BLUEPRINTS.get(product_type, blueprint_id or 12)
+        # Default: art fills the print area, centered. ``image_transform`` lets a
+        # caller shrink/reposition it per product (e.g. the 15oz mug shrinks the
+        # logo into the top 80% so the bottom 20% stays clear for text).
+        tf: Dict[str, Any] = {"x": 0.5, "y": 0.5, "scale": 1, "angle": 0}
+        if image_transform:
+            tf.update({k: image_transform[k]
+                       for k in ("x", "y", "scale", "angle") if k in image_transform})
         if image_id:
-            image_entry: Dict[str, Any] = {"id": image_id, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}
+            image_entry: Dict[str, Any] = {"id": image_id, **tf}
         elif image_src:
-            image_entry = {"src": image_src, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}
+            image_entry = {"src": image_src, **tf}
         else:
             raise PrintifyError("create_product requires image_id or image_src.")
+        # For non-tee products the "front" placeholder name may differ; Printify accepts "front" for most.
+        # Stickers/posters often use a single print area.
         payload = {
             "title": title,
             "description": description,
-            "blueprint_id": blueprint_id,
+            "blueprint_id": eff_blueprint,
             "print_provider_id": print_provider_id,
             "variants": [{"id": vid, "price": int(price_cents), "is_enabled": True}
                          for vid in variant_ids],
@@ -104,6 +128,83 @@ class PrintifyClient:
         }
         return self._request("POST", f"/shops/{self.shop_id}/products.json",
                              payload=payload, dry_run=dry_run)
+
+    def get_product(self, product_id: str, dry_run: bool = False) -> Dict[str, Any]:
+        if not self.shop_id and not dry_run:
+            raise PrintifyError("PRINTIFY_SHOP_ID is not configured.")
+        return self._request("GET", f"/shops/{self.shop_id}/products/{product_id}.json",
+                             dry_run=dry_run)
+
+    def replace_print_image(self, product_id: str, image_id: str,
+                            dry_run: bool = False) -> Dict[str, Any]:
+        """Swap the print image on an existing draft, preserving its print_areas.
+
+        Printify rejects a print_areas update unless every product variant is
+        present in ``print_areas.*.variant_ids`` (error 8251). The product is
+        auto-populated with the blueprint's *full* variant set at creation, so
+        we must reuse the product's existing print_areas wholesale and only
+        replace the image id in each placeholder.
+        """
+        if dry_run:
+            return {"dry_run": True, "replace_print_image": product_id, "image_id": image_id}
+        product = self.get_product(product_id)
+        new_areas: List[Dict[str, Any]] = []
+        for area in product.get("print_areas", []):
+            placeholders = []
+            for ph in area.get("placeholders", []):
+                imgs = ph.get("images") or []
+                if imgs:
+                    new_imgs = []
+                    for im in imgs:
+                        new_imgs.append({"id": image_id,
+                                         "x": im.get("x", 0.5), "y": im.get("y", 0.5),
+                                         "scale": im.get("scale", 1), "angle": im.get("angle", 0)})
+                else:
+                    new_imgs = [{"id": image_id, "x": 0.5, "y": 0.5, "scale": 1, "angle": 0}]
+                placeholders.append({"position": ph.get("position", "front"), "images": new_imgs})
+            new_areas.append({"variant_ids": area.get("variant_ids", []),
+                              "placeholders": placeholders})
+        return self.update_product(product_id, {"print_areas": new_areas})
+
+    def add_text_placement(self, product_id: str, image_id: str, position: str, *,
+                           x: float = 0.5, y: float = 0.5, scale: float = 1.0,
+                           angle: int = 0, stack: bool = False,
+                           dry_run: bool = False) -> Dict[str, Any]:
+        """Place ``image_id`` (typically rendered text) at ``position`` on the draft.
+
+        ``position`` is a Printify placeholder name available for the blueprint
+        (e.g. ``front``, ``back``, ``left_sleeve``, ``right_sleeve``, ``neck``).
+        Every existing ``print_areas.*.variant_ids`` set is preserved wholesale
+        so Printify doesn't reject the update (error 8251), and existing
+        placeholders/images are re-mapped intact.
+
+        ``stack=True`` keeps any images already in that position and appends the
+        new one (used to add text *beneath* existing front art); ``stack=False``
+        replaces the images at that position only.
+        """
+        if dry_run:
+            return {"dry_run": True, "add_text_placement": product_id,
+                    "image_id": image_id, "position": position, "stack": stack}
+        entry = {"id": image_id, "x": x, "y": y, "scale": scale, "angle": angle}
+        product = self.get_product(product_id)
+        new_areas: List[Dict[str, Any]] = []
+        for area in product.get("print_areas", []):
+            placeholders = []
+            found = False
+            for ph in area.get("placeholders", []):
+                pos = ph.get("position", "front")
+                remapped = [{"id": im.get("id"), "x": im.get("x", 0.5), "y": im.get("y", 0.5),
+                             "scale": im.get("scale", 1), "angle": im.get("angle", 0)}
+                            for im in (ph.get("images") or [])]
+                if pos == position:
+                    found = True
+                    remapped = (remapped + [entry]) if stack else [entry]
+                placeholders.append({"position": pos, "images": remapped})
+            if not found:
+                placeholders.append({"position": position, "images": [entry]})
+            new_areas.append({"variant_ids": area.get("variant_ids", []),
+                              "placeholders": placeholders})
+        return self.update_product(product_id, {"print_areas": new_areas})
 
     def update_product(self, product_id: str,
                        updates: Dict[str, Any],
@@ -118,6 +219,39 @@ class PrintifyClient:
             raise PrintifyError("PRINTIFY_SHOP_ID is not configured.")
         return self._request("PUT", f"/shops/{self.shop_id}/products/{product_id}.json",
                              payload=updates, dry_run=dry_run)
+
+    def set_enabled_variants(self, product_id: str, enable_ids: Iterable[int],
+                             dry_run: bool = False) -> Dict[str, Any]:
+        """Enable only ``enable_ids`` on the draft, disabling every other variant.
+
+        Reducing a tee to a single colorway makes Printify regenerate its mockup
+        set to include back / model / folded shots — multi-color listings only
+        get one front per color and no back. Prices are preserved. Only the
+        product's currently-enabled variants (plus any newly-requested ones) are
+        sent, keeping the payload small; ``print_areas`` is untouched.
+        """
+        enable = set(enable_ids)
+        if dry_run:
+            return {"dry_run": True, "set_enabled_variants": product_id,
+                    "enable": sorted(enable)}
+        product = self.get_product(product_id)
+        payload_variants: List[Dict[str, Any]] = []
+        for v in product.get("variants", []):
+            vid = v.get("id")
+            if v.get("is_enabled") or vid in enable:
+                payload_variants.append({"id": vid, "price": v.get("price"),
+                                         "is_enabled": vid in enable})
+        if not any(pv["is_enabled"] for pv in payload_variants):
+            raise PrintifyError(
+                f"set_enabled_variants: none of {sorted(enable)} match this "
+                f"product's variants — refusing to disable all.")
+        return self.update_product(product_id, {"variants": payload_variants})
+
+    def delete_product(self, product_id: str, dry_run: bool = False) -> Dict[str, Any]:
+        if not self.shop_id and not dry_run:
+            raise PrintifyError("PRINTIFY_SHOP_ID is not configured.")
+        return self._request("DELETE", f"/shops/{self.shop_id}/products/{product_id}.json",
+                             dry_run=dry_run)
 
     def publish_product(self, product_id: str, dry_run: bool = False) -> Dict[str, Any]:
         if not self.shop_id and not dry_run:

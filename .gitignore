@@ -12,6 +12,11 @@ hitl_state.json
 data/empire-pending.json
 data/empire-decisions.jsonl
 data/empire-applied.jsonl
+data/art/
+data/drop-*.log
+data/addtext_processed.json
+data/refine_processed.json*
+inbox/
 __pycache__/
 *.pyc
 .pytest_cache/

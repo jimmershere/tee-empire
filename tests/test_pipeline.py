@@ -7,14 +7,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from empire.core import brands as brands_mod
-from empire.core import fixtures
-from empire.core.orchestrator import Orchestrator
-from empire.core.store import Store
-from empire.core.concepts import generate_concept
+from core import brands as brands_mod
+from core import fixtures
+from core.orchestrator import Orchestrator
+from core.store import Store
+from core.concepts import generate_concept
 
 
 class IsolatedDBTest(unittest.TestCase):
@@ -61,7 +61,7 @@ class TestPromptCraft(IsolatedDBTest):
     """Anti-hallucination prompt-craft skill (from exec_dashbd)."""
 
     def test_avoid_clause_per_subject(self) -> None:
-        from empire.core import prompt_craft
+        from core import prompt_craft
         cm = prompt_craft.avoid_clause("cartoon_mascot")
         self.assertIn("Avoid:", cm)
         self.assertIn("extra limbs", cm)
@@ -86,7 +86,7 @@ class TestPromptCraft(IsolatedDBTest):
         self.assertNotIn("extra limbs", c.design_prompt)
 
     def test_enhance_idempotent(self) -> None:
-        from empire.core import prompt_craft
+        from core import prompt_craft
         raw = "test prompt"
         once = prompt_craft.enhance_design_prompt(raw, subject="cartoon_mascot")
         twice = prompt_craft.enhance_design_prompt(once, subject="cartoon_mascot")
