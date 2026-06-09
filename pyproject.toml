@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tmpire"
+version = "0.1.0"
+description = "Brand-scoped print-on-demand merch automation: drop an image or idea, fan out a Printify→Etsy bundle, review via a local gate, and cross-promote to social."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Jimmer Kelley" }]
+keywords = ["print-on-demand", "printify", "etsy", "merch", "automation", "flask"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Framework :: Flask",
+    "Intended Audience :: End Users/Desktop",
+]
+dependencies = [
+    "flask>=2.0",
+    "Pillow>=9.0",
+    "PyYAML>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jimmershere/tee-empire"
+Repository = "https://github.com/jimmershere/tee-empire"
+
+# Flat layout: the importable code lives at the repo root (the `core` and
+# `empire` packages plus the top-level `cli` module), so discovery is listed
+# explicitly rather than auto-detected.
+[tool.setuptools]
+packages = ["core", "empire"]
+py-modules = ["cli"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.yaml"]
