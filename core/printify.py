@@ -19,8 +19,9 @@ STANDARD_UNISEX_TEE_BLUEPRINTS = {
 # These are starting points — users should verify in their Printify catalog for their providers.
 PRODUCT_BLUEPRINTS = {
     "shirt": 12,      # Bella+Canvas 3001
-    "mug": 19,        # 11/15oz ceramic mug (common)
-    "sticker": 57,    # Die-cut / kiss-cut sticker (common)
+    "mug": 478,       # Ceramic Mug (11oz, 15oz)
+    "sticker": 400,   # Kiss-Cut Stickers
+    "bottle": 887,    # Stainless Steel Water Bottle, Standard Lid
     "poster": 163,    # Poster / matte print (common starting point)
 }
 

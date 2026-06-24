@@ -82,6 +82,21 @@ def cmd_brands(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_onboard(args: argparse.Namespace) -> int:
+    """Scaffold a new customer brand + clemtock ad theme from an intake.json.
+
+    See ONBOARDING.md for the intake prompt + schema."""
+    import subprocess
+    script = Path(__file__).resolve().parent / "scripts" / "onboard_brand.py"
+    if not script.exists():
+        print(f"onboard scaffolder not found: {script}", file=sys.stderr)
+        return 2
+    cmd = [sys.executable, str(script), args.intake]
+    if args.clemtock:
+        cmd += ["--clemtock", args.clemtock]
+    return subprocess.call(cmd)
+
+
 def cmd_import(args: argparse.Namespace) -> int:
     store = Store()
     src = Path(args.source).expanduser().resolve()
@@ -559,6 +574,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("brands", help="List configured brands")
     sp.set_defaults(func=cmd_brands)
+
+    sp = sub.add_parser("onboard", help="Scaffold a new brand + clemtock theme from an intake.json (see ONBOARDING.md)")
+    sp.add_argument("--intake", required=True, help="path to intake.json")
+    sp.add_argument("--clemtock", default=None, help="path to the clemtock repo (default: ../clemtock)")
+    sp.set_defaults(func=cmd_onboard)
 
     sp = sub.add_parser("import", help="Import legacy earl-biggers concepts/designs")
     sp.add_argument("--source", required=True, help="Path to legacy earl-biggers folder")
