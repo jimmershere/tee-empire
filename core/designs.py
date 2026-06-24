@@ -391,10 +391,15 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
     reference_png = None
     try:
         from empire.core import brands as _brands_mod
-        char_path = _brands_mod.brand_dir(brand.slug) / "fixtures" / "character.png"
         lane = (getattr(concept, "lane", "") or "").lower()
-        if char_path.exists() and not any(k in lane for k in ("nickel", "novelty", "drops")):
-            reference_png = char_path.read_bytes()
+        cextra = getattr(concept, "extra", None) or {}
+        override = cextra.get("character_ref")  # per-concept reference (e.g. an alt mascot)
+        if override and Path(override).exists():
+            reference_png = Path(override).read_bytes()
+        else:
+            char_path = _brands_mod.brand_dir(brand.slug) / "fixtures" / "character.png"
+            if char_path.exists() and not any(k in lane for k in ("nickel", "novelty", "drops")):
+                reference_png = char_path.read_bytes()
     except Exception:
         reference_png = None
     variants, art_source = images.generate_design_variants(
