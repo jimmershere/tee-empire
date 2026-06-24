@@ -385,10 +385,22 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
     Returns the updated Design.
     """
     pt = product_type or (concept.extra or {}).get("product_type") or "shirt"
+    # Brand-mascot reference (img2img): if the brand ships a character fixture,
+    # use it for brand-character lanes (e.g. madd_style) so the mascot stays
+    # consistent. Novelty lanes (nickel/drops) stay text-to-image.
+    reference_png = None
+    try:
+        from empire.core import brands as _brands_mod
+        char_path = _brands_mod.brand_dir(brand.slug) / "fixtures" / "character.png"
+        lane = (getattr(concept, "lane", "") or "").lower()
+        if char_path.exists() and not any(k in lane for k in ("nickel", "novelty", "drops")):
+            reference_png = char_path.read_bytes()
+    except Exception:
+        reference_png = None
     variants, art_source = images.generate_design_variants(
         design.design_text, concept.design_prompt,
         backend=backend, text_color=_to_hex(design.text_color),
-        shirt_color=_to_hex(design.shirt_color), dry_run=dry_run,
+        shirt_color=_to_hex(design.shirt_color), reference_png=reference_png, dry_run=dry_run,
     )
 
     # If the concept declared a text overlay, paint it onto every variant
