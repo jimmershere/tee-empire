@@ -102,7 +102,7 @@ class TestPromptCraft(IsolatedDBTest):
 
 class TestImportFixtures(IsolatedDBTest):
     def test_import_legacy_concepts_and_designs(self) -> None:
-        legacy = Path("/app/cc/sources/earl-biggers")
+        legacy = Path("/app/tee-empire/sources/earl-biggers")
         if not legacy.exists():
             self.skipTest("legacy earl-biggers sources not present")
         c, d = fixtures.import_earl_biggers_from_path(legacy, self.store)

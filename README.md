@@ -1,10 +1,12 @@
 <p align="center">
-  <img src="assets/logo.png" alt="TMPIRE — Merch Creation Overlord · Union Made · Blue Collar Meets Code Scholar" width="340">
+  <img src="assets/logo.png" alt="Portwright Press — Built in Port · Proven at Sea" width="340">
 </p>
 
-<h1 align="center">👕 TeeEmpire</h1>
+<h1 align="center">⚓ Portwright Press</h1>
 
-<p align="center"><em>Merch Creation Overlord · Union Made · Blue Collar Meets Code Scholar</em></p>
+<p align="center"><em>Built in Port · Proven at Sea — the Portwright print-on-demand merch line</em></p>
+
+<p align="center"><sub>A Portwright product. The <code>empire</code> CLI command and <code>EMPIRE_*</code> env prefix are unchanged (renaming them is high-blast-radius; deferred).</sub></p>
 
 > A pluggable, brand-scoped automation pipeline that turns a **dropped image or text idea** into a full **print-on-demand merch bundle** (tee, tie-dye tee, mug, sticker, poster), reviews it through a local web gate, ships it to **Printify → Etsy**, and cross-promotes the drop to social via **PostBridge**.
 

@@ -1,4 +1,4 @@
-"""Local web approval/edit gate for TeeEmpire.
+"""Local web approval/edit gate for Portwright Press.
 
 Simple, local-only (no ssh, no remote .206). Run with:
   python -m empire.cli gate --port 3333
@@ -102,34 +102,51 @@ INDEX_HTML = """
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Empire • Local Gate</title>
+<title>Portwright Press · Approval Gate</title>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#0a0a0a;color:#eee;margin:0;padding:24px}
+:root{--ink:#0B1018;--ink2:#0E1620;--panel:#121C2A;--panel2:#16212F;--line:#22324C;--line2:#2E4150;
+  --lime:#A6E84A;--orange:#EF6A28;--cream:#ECE4D2;--text:#E7EBEF;--muted:#93A6BC;--red:#FF5A4D}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Saira Condensed',sans-serif;background:var(--ink);color:var(--text);margin:0;padding:0;min-height:100vh;
+  background-image:linear-gradient(rgba(34,50,76,.25) 1px,transparent 1px),linear-gradient(90deg,rgba(34,50,76,.25) 1px,transparent 1px);
+  background-size:48px 48px}
+header{display:flex;align-items:center;gap:14px;padding:18px 28px;border-bottom:1px solid var(--line)}
+header .kick{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:3px;color:var(--lime);text-transform:uppercase}
+header .mark{font-weight:800;font-size:30px;letter-spacing:-1px}.mark span{color:var(--orange)}
+.bar{padding:14px 28px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted)}
+.bar a{color:var(--lime);text-decoration:none}
 h1{font-size:20px;margin:0 0 12px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}
-.card{background:#111;border:1px solid #222;border-radius:12px;overflow:hidden}
-.thumb{width:100%;height:260px;object-fit:contain;background:#1a1a1a;display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;padding:0 28px 28px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.thumb{width:100%;height:260px;object-fit:contain;background:var(--ink2);display:block}
 .meta{padding:12px 14px 14px}
-h3{margin:0 0 4px;font-size:14px}
-.brand{font-size:10px;opacity:.6;text-transform:uppercase;letter-spacing:.5px}
-.tagline{font-size:12px;opacity:.85;margin:6px 0}
-.score{font-size:11px;opacity:.6}
+h3{margin:0 0 4px;font-size:16px;color:var(--cream)}
+.brand{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--lime);text-transform:uppercase;letter-spacing:.5px}
+.tagline{font-size:13px;color:var(--muted);margin:6px 0}
+.score{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-.btn{padding:6px 10px;font-size:12px;border-radius:6px;border:1px solid #333;background:#222;color:#ccc;cursor:pointer;text-decoration:none}
-.btn.primary{background:#6cf;color:#000;border-color:#6cf}
-.btn.danger{color:#f88;border-color:#522}
+.btn{padding:7px 12px;font-size:12px;border-radius:8px;border:1px solid var(--line2);background:var(--panel2);color:var(--cream);cursor:pointer;text-decoration:none;font-family:'JetBrains Mono',monospace}
+.btn.primary{background:var(--lime);color:#10210a;border-color:var(--lime);font-weight:700}
+.btn.danger{color:var(--red);border-color:#522}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 .alts{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
-.alt img{width:100%;height:64px;object-fit:contain;background:#1a1a1a;border-radius:4px;border:1px solid #222}
+.alt img{width:100%;height:64px;object-fit:contain;background:var(--ink2);border-radius:6px;border:1px solid var(--line2)}
 form.inline{display:inline}
-input,textarea,select{background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px;padding:4px 6px;font-size:12px}
-small{opacity:.5}
+input,textarea,select{background:var(--ink2);color:var(--text);border:1px solid var(--line2);border-radius:6px;padding:6px 8px;font-size:13px;font-family:'Saira Condensed',sans-serif}
+small{color:var(--muted)}
 </style></head><body>
-<h1>TeeEmpire • Local Approval Gate <small>(kie.ai + openrouter default)</small></h1>
-<p><a href="/refresh">Refresh</a> | <a href="/picks">Export static picks HTML</a> | Pending: {{ count }}</p>
-<details class="uploader" {{ 'open' if upload_msg else '' }} style="background:#101319;border:1px solid #243;border-radius:12px;padding:14px 16px;margin:0 0 18px">
-  <summary style="font-size:15px;cursor:pointer">⬆️ Upload seed image + back/under text → RENDER bundle</summary>
-  {% if upload_msg %}<p style="color:#6f6;font-size:12px;margin:8px 0 0">{{ upload_msg }}</p>{% endif %}
+<header>
+  <div>
+    <div class="kick">Built in Port · Proven at Sea</div>
+    <div class="mark">portwright<span> press</span> · approval gate</div>
+  </div>
+  <div style="margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:46px;line-height:1" title="Clem">🐙</div>
+</header>
+<div class="bar"><a href="/refresh">Refresh</a> | <a href="/picks">Export static picks HTML</a> | Pending: {{ count }}</div>
+<details class="uploader" {{ 'open' if upload_msg else '' }} style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0 28px 18px">
+  <summary style="font-size:16px;cursor:pointer;color:var(--cream)">⬆️ Upload seed image + back/under text → RENDER bundle</summary>
+  {% if upload_msg %}<p style="color:var(--lime);font-size:12px;margin:8px 0 0">{{ upload_msg }}</p>{% endif %}
   <form action="/drop" method="post" enctype="multipart/form-data" style="margin-top:10px;display:grid;gap:10px;max-width:720px">
     <label>Seed image <input type="file" name="image" accept="image/png,image/jpeg,image/webp" required></label>
     <label>Title / prompt seed (optional)<br><input name="prompt" size="60" placeholder="e.g. Cryptid Field Guide — Mothman"></label>
@@ -220,9 +237,11 @@ document.querySelectorAll('form').forEach(f => f.addEventListener('submit', () =
 """
 
 PICKS_HTML = """
-<!doctype html><html><head><meta charset="utf-8"><title>Empire Local Picks</title>
-<style>body{background:#0a0a0a;color:#eee;font-family:sans-serif;padding:20px} .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px} .card{border:1px solid #222;background:#111;border-radius:8px;overflow:hidden} img{width:100%;height:220px;object-fit:contain;background:#1a1a1a} .m{padding:8px 10px;font-size:13px}</style>
-</head><body><h1>Local Picks</h1><div class="grid">{{cards}}</div></body></html>
+<!doctype html><html><head><meta charset="utf-8"><title>Portwright Press · Local Picks</title>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>:root{--ink:#0B1018;--ink2:#0E1620;--panel:#121C2A;--line:#22324C;--lime:#A6E84A;--orange:#EF6A28;--cream:#ECE4D2;--text:#E7EBEF}
+body{background:var(--ink);color:var(--text);font-family:'Saira Condensed',sans-serif;padding:20px} .kick{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:3px;color:var(--lime);text-transform:uppercase} h1{font-weight:800;letter-spacing:-1px} h1 span{color:var(--orange)} .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:14px} .card{border:1px solid var(--line);background:var(--panel);border-radius:10px;overflow:hidden} img{width:100%;height:220px;object-fit:contain;background:var(--ink2)} .m{padding:8px 10px;font-size:13px}</style>
+</head><body><div class="kick">Built in Port · Proven at Sea</div><h1>portwright<span> press</span> · local picks</h1><div class="grid">{{cards}}</div></body></html>
 """
 
 
@@ -435,10 +454,24 @@ if _FLASK_AVAILABLE and app is not None:
 
 
 def run_gate(host: str = "127.0.0.1", port: int = 3333, debug: bool = False) -> None:
-    """Entry point for CLI. Starts the local-only approval/edit web UI."""
+    """Entry point for CLI. Starts the local-only approval/edit web UI.
+
+    Honors BIND_HOST / PORT env vars (used by the hosted systemd unit) so the
+    gate can bind 0.0.0.0:<PORT> without a CLI flag. Explicit env wins over the
+    127.0.0.1 default; an explicit non-default CLI --host is preserved.
+    """
+    env_host = os.environ.get("BIND_HOST")
+    if env_host:
+        host = env_host
+    env_port = os.environ.get("PORT")
+    if env_port:
+        try:
+            port = int(env_port)
+        except ValueError:
+            pass
     if not _FLASK_AVAILABLE or app is None:
         _no_flask()
-    print(f"Starting local Empire gate at http://{host}:{port} (Ctrl-C to stop)")
+    print(f"Starting Portwright Press gate at http://{host}:{port} (Ctrl-C to stop)")
     print("Open the URL in your browser. Approve/edit there, then use `empire ship --brand X --live` or the gate's approve+ship buttons.")
     app.run(host=host, port=port, debug=debug, use_reloader=False)  # type: ignore
 
