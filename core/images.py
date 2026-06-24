@@ -70,18 +70,40 @@ def generate_design_png(design_text: str, design_prompt: str, *, backend: Option
     return variants[0], source
 
 
+def _character_edit_instruction(design_prompt: str) -> str:
+    """Instruction for reference-guided (img2img) generation that keeps a brand
+    mascot's likeness while drawing a brand-new tee graphic."""
+    return (
+        "Use the character in the provided image as the recurring brand mascot. "
+        "Keep her likeness consistent: curly dark-red hair, round glasses, and a "
+        "call-center headset. Redraw her as a brand-new bold vintage cartoon "
+        "t-shirt graphic (do not copy the reference pose).\n\n"
+        f"{design_prompt}\n\n"
+        "Output: a single front-of-shirt print-ready graphic on a transparent "
+        "background — no mockup, no photo, no shirt, no border, no watermark. "
+        "TEXT RULE (critical): the ONLY words allowed are the exact headline "
+        "specified above; no subtitle, tagline, caption, or signature."
+    )
+
+
 def generate_design_variants(design_text: str, design_prompt: str, *,
                              backend: Optional[str] = None,
                              size: Tuple[int, int] = (1200, 1500),
                              text_color: str = "#FFFFFF",
                              shirt_color: str = "#111111",
+                             reference_png: Optional[bytes] = None,
                              dry_run: bool = False) -> Tuple[List[bytes], str]:
-    """Generate one or more variants. ComfyUI honours its workflow's batch_size; other backends return 1."""
+    """Generate one or more variants. ComfyUI honours its workflow's batch_size; other backends return 1.
+
+    reference_png: if provided (and backend supports it), the image guides the
+    generation so a brand mascot's likeness stays consistent (img2img)."""
     backend = (backend or select_backend()).lower()
     if dry_run or backend == "placeholder":
         return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder"
     if backend == "openai":
         try:
+            if reference_png:
+                return [_openai_edit_image(reference_png, _character_edit_instruction(design_prompt), size)], "openai-edit"
             return [_openai_image(design_prompt, size)], "openai"
         except Exception:
             return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
