@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""TeeEmpire CLI — `python -m empire.cli <command> ...`."""
+"""Portwright Press CLI — `python -m empire.cli <command> ...`.
+
+The `empire` CLI command name and `EMPIRE_*` env prefix are intentionally
+unchanged (renaming them is high-blast-radius; deferred).
+"""
 from __future__ import annotations
 
 import argparse
@@ -8,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-# Allow `python /app/cc/empire/cli.py ...` as well as `-m empire.cli`.
+# Allow `python /app/tee-empire/cli.py ...` as well as `-m empire.cli`.
 # Also support flat layout (tee-empire/ with core/ at root) by making the root
 # importable as the "empire" package without requiring an on-disk "empire/" subdir.
 ROOT = Path(__file__).resolve().parents[1]
@@ -301,6 +305,16 @@ def cmd_mc_poll(args: argparse.Namespace) -> int:
                                         reviewer="mc-ui")
                     action = {"slug": slug, "decision": "approve",
                               "printify_result": result}
+                    # 2nd port: publish the approved design to the maddhatchery.com storefront.
+                    try:
+                        from empire.core import maddhatchery as mh_mod
+                        _design = store.get_design(listing.brand, slug)
+                        _concept = store.get_concept(listing.brand, slug)
+                        if _design and _concept:
+                            action["site_result"] = mh_mod.MaddhatcheryPublisher().publish_design(
+                                _concept, _design, brand, dry_run=not args.live)
+                    except Exception as _se:
+                        action["site_error"] = str(_se)
                     if args.live and getattr(args, "promote", False):
                         action["promotion"] = _auto_promote_listing(
                             listing, store,
@@ -422,6 +436,23 @@ def cmd_ship(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_publish_site(args: argparse.Namespace) -> int:
+    """Publish a brand's designs to the maddhatchery.com storefront (the Nickel T's page)."""
+    from empire.core import brands as brands_mod
+    from empire.core import maddhatchery as mh_mod
+    from empire.core.store import Store
+    store = Store()
+    brand = brands_mod.load_brand(args.brand)
+    actions = mh_mod.publish_brand_designs(
+        brand, store, dry_run=not args.live, category=args.category, limit=args.limit
+    )
+    ok = len([a for a in actions if a.get("success")])
+    print(json.dumps({"published": ok, "total": len(actions), "live": bool(args.live),
+                      "target": mh_mod.MaddhatcheryPublisher().api_url, "actions": actions},
+                     indent=2, default=str))
+    return 0
+
+
 def cmd_drop(args: argparse.Namespace) -> int:
     """Process any image/prompt files sitting in the inbox into the default bundle."""
     from empire.core import ingest
@@ -523,7 +554,7 @@ def cmd_mc_open(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="empire", description="TeeEmpire multi-brand t-shirt automation")
+    p = argparse.ArgumentParser(prog="empire", description="Portwright Press — multi-brand print-on-demand merch automation")
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("brands", help="List configured brands")
@@ -612,6 +643,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--brand", required=True)
     sp.add_argument("--live", action="store_true")
     sp.set_defaults(func=cmd_ship)
+
+    sp = sub.add_parser("publish-site", help="Publish a brand's designs to the maddhatchery.com storefront (Nickel T's)")
+    sp.add_argument("--brand", required=True)
+    sp.add_argument("--category", default=None, help="Force a site category (nickel-tee|madd-tee|mug|sticker)")
+    sp.add_argument("--limit", type=int, default=None)
+    sp.add_argument("--live", action="store_true", help="Actually POST to the site (otherwise dry-run)")
+    sp.set_defaults(func=cmd_publish_site)
 
     sp = sub.add_parser("drop", help="Process inbox image/prompt drops into the default merch bundle + push to .206")
     sp.add_argument("--brand", default="earl_biggers")
