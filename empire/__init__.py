@@ -1,4 +1,4 @@
-"""TeeEmpire local package shim.
+"""Portwright Press local package shim (CLI command name `empire` unchanged).
 
 This directory makes `python -m empire` and `python -m empire.cli` work directly
 from the source checkout without requiring `pip install -e .` or manual symlinks.

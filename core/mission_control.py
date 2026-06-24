@@ -320,17 +320,21 @@ def _render_html(designs: list, asset_map: dict) -> str:
         <html lang="en"><head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Empire — Best Picks</title>
+          <title>Portwright Press — Best Picks</title>
+          <link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
           <style>
             :root {
-              --bg: #0e1014; --panel: #171a21; --panel-2: #1d212a;
-              --line: rgba(255,255,255,.09); --text: #eef1f6; --muted: #9aa3b2;
-              --accent: #5b8cff; --accent-soft: rgba(91,140,255,.16);
-              --green: #34c77b; --red: #ff6b6b;
+              --bg: #0B1018; --panel: #121C2A; --panel-2: #16212F;
+              --line: #22324C; --text: #E7EBEF; --muted: #93A6BC;
+              --accent: #A6E84A; --accent-soft: rgba(166,232,74,.16);
+              --orange: #EF6A28; --cream: #ECE4D2;
+              --green: #A6E84A; --red: #FF5A4D;
             }
             * { box-sizing: border-box; margin: 0; padding: 0; }
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                   background: radial-gradient(1200px 600px at 50% -200px, #1a1f2b, var(--bg)) fixed;
+            body { font-family: 'Saira Condensed', sans-serif;
+                   background: var(--bg);
+                   background-image: linear-gradient(rgba(34,50,76,.25) 1px,transparent 1px),linear-gradient(90deg,rgba(34,50,76,.25) 1px,transparent 1px);
+                   background-size: 48px 48px;
                    color: var(--text); padding: 28px clamp(16px,4vw,40px); }
             header { display: flex; align-items: center; justify-content: space-between;
                      gap: 16px; margin-bottom: 26px; }
@@ -428,7 +432,10 @@ def _render_html(designs: list, asset_map: dict) -> str:
           <header>
             <div class="brandmark">
               <span class="dot"></span>
-              <h1>TeeEmpire <small>Best Picks · approve, reject or add text</small></h1>
+              <div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:3px;color:var(--accent);text-transform:uppercase">Built in Port · Proven at Sea</div>
+                <h1 style="font-weight:800;letter-spacing:-.6px">Portwright Press <small>Best Picks · approve, reject or add text</small></h1>
+              </div>
             </div>
             <span class="meta-stamp">$count items<br>refreshed $stamp</span>
           </header>
