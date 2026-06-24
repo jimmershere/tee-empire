@@ -1,0 +1,31 @@
+slug: madd_hatchery
+name: Madd Hatchery
+voice: >-
+  Playful hippy-country farm humor from Trish's urban hatchery. Warm, witty,
+  a little sassy — barnyard puns, jam-and-egg jokes, tie-dye-and-overalls
+  energy. Wholesome, never crude. Bold cartoon sticker-style art with thick
+  outlines and bright flat color.
+niches:
+  - farm & homestead humor
+  - chicken / egg puns
+  - novelty critters
+  - tie-dye country
+palette:
+  - white
+  - natural
+  - heather prairie
+  - sand
+  - light blue
+lanes:
+  - nickel
+  - madd_style
+adult_listing_default: false
+pricing:
+  base_usd: 28.0
+printify_shop_id: "27415408"
+printify_blueprint_id: 12
+printify_print_provider_id: 6
+printify_variant_ids: [18100, 18101, 18102, 18103, 18104]
+printify_price_cents: 2800
+etsy_shop_id: null
+review_chat_id: null
