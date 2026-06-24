@@ -211,7 +211,11 @@ def _openai_image(prompt: str, size: Tuple[int, int]) -> bytes:
         f"{prompt}\n\n"
         "Output: a single front-of-shirt print-ready graphic on a transparent background. "
         "No mockup, no model, no photography, no shirt, no border, no watermark. "
-        "Just the artwork that would be screenprinted on the chest."
+        "Just the artwork that would be screenprinted on the chest.\n"
+        "TEXT RULE (critical): the ONLY words allowed in the image are the exact headline "
+        "specified above. Do NOT add any other text — no subtitle, tagline, caption, "
+        "signature, brand name, label, or decorative lettering of any kind. If unsure, "
+        "render no text besides that single headline."
     )
     payload = {
         "model": "gpt-image-1",
