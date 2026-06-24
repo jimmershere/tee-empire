@@ -437,6 +437,8 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
                 mockup = _compose_mug_mockup(variants[orig_idx], design.shirt_color)
             elif pt == "sticker":
                 mockup = _compose_sticker_mockup(variants[orig_idx])
+            elif pt == "bottle":
+                mockup = _compose_bottle_mockup(variants[orig_idx], design.shirt_color)
             elif pt == "poster":
                 mockup = _compose_poster_mockup(variants[orig_idx])
             else:
@@ -516,6 +518,35 @@ def _compose_sticker_mockup(art_png: bytes) -> "Image.Image":
     bg.paste(art, pos, art if art.mode == "RGBA" else None)
     # subtle cut line
     d.ellipse([70, 70, canvas-70, canvas-70], outline=(200, 200, 200), width=3)
+    return bg
+
+
+def _compose_bottle_mockup(art_png: bytes, bottle_color: str = "#1b6f74") -> "Image.Image":
+    """Insulated water-bottle mockup: tall rounded body + cap + centered art."""
+    canvas_w, canvas_h = 1200, 1600
+    bg = Image.new("RGB", (canvas_w, canvas_h), (245, 245, 240))
+    d = ImageDraw.Draw(bg)
+    col = _parse_color(bottle_color)
+    cx = canvas_w // 2
+    # body
+    body = [cx - 290, 360, cx + 290, 1480]
+    if hasattr(d, "rounded_rectangle"):
+        d.rounded_rectangle(body, radius=140, fill=col)
+    else:
+        d.rectangle(body, fill=col)
+    # shoulder + neck + cap
+    d.rounded_rectangle([cx - 150, 230, cx + 150, 410], radius=40, fill=col)
+    d.rounded_rectangle([cx - 110, 120, cx + 110, 260], radius=30, fill=(38, 38, 42))
+    # subtle highlight stripe
+    d.rounded_rectangle([cx - 250, 420, cx - 200, 1420], radius=30, fill=(255, 255, 255, 0) if False else (
+        min(col[0] + 40, 255), min(col[1] + 40, 255), min(col[2] + 40, 255)))
+    # art centered on body
+    art = Image.open(BytesIO(art_png)).convert("RGBA")
+    aw = int(440)
+    ah = int(art.height * (aw / art.width))
+    art = art.resize((aw, ah), Image.LANCZOS)
+    pos = (int(cx - aw / 2), int((body[1] + body[3]) / 2 - ah / 2))
+    bg.paste(art, pos, art if art.mode == "RGBA" else None)
     return bg
 
 
