@@ -169,9 +169,12 @@ def main():
     ap.add_argument("--printify-product", default=None)
     ap.add_argument("--logo", default="/app/maddhatch/public/assets/v3/logo_2026.png",
                     help="front-left-chest trademark logo (apparel only)")
+    ap.add_argument("--dump-dir", default="",
+                    help="write the storefront payload to <dir>/<slug>.json instead of POSTing "
+                         "(lets the target host POST it locally with its own admin token)")
     args = ap.parse_args()
 
-    token = os.environ["MADDHATCHERY_ADMIN_TOKEN"]
+    token = os.environ.get("MADDHATCHERY_ADMIN_TOKEN", "") if args.dump_dir else os.environ["MADDHATCHERY_ADMIN_TOKEN"]
     price_cents = int(round(args.price * 100))
     bp = BLUEPRINT[args.product]
     want_colors = [c.strip() for c in args.colors.split(",") if c.strip()]
@@ -283,6 +286,12 @@ def main():
     payload = {"slug": args.slug, "name": args.name, "category": args.category,
                "description": args.description, "price_cents": price_cents, "quantity": 999,
                "printify_product_id": prod_id, "variants": variants, "colors": colors_payload}
+    if args.dump_dir:
+        outp = Path(args.dump_dir); outp.mkdir(parents=True, exist_ok=True)
+        f = outp / f"{args.slug}.json"
+        f.write_text(json.dumps(payload))
+        print(f"payload dumped: {f} ({f.stat().st_size // 1024} KB, colors={len(colors_payload)})")
+        return 0
     r = http_post(args.api.rstrip("/") + "/api/admin/product", payload, token)
     print(f"storefront published: ok={r.get('ok')} variants={(r.get('product') or {}).get('variants')} colors={len(colors_payload)}")
 

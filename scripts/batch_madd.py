@@ -26,11 +26,12 @@ ap.add_argument('--api', default='http://localhost:3310')
 ap.add_argument('--only', default='')          # substring filter on concept slug
 ap.add_argument('--variants', default='1')     # EMPIRE_OPENROUTER_VARIANTS for this run
 ap.add_argument('--skip-regen', action='store_true')  # publish existing art only
+ap.add_argument('--dump-dir', default='')             # write payloads instead of POSTing
 args = ap.parse_args()
 os.environ['EMPIRE_OPENROUTER_VARIANTS'] = args.variants
 
 API = args.api
-TOK = os.environ['MADDHATCHERY_ADMIN_TOKEN']
+TOK = os.environ.get('MADDHATCHERY_ADMIN_TOKEN', '') if args.dump_dir else os.environ['MADDHATCHERY_ADMIN_TOKEN']
 LOGO = '/app/maddhatch/public/assets/v3/logo_2026.png'
 
 
@@ -67,12 +68,14 @@ for cslug, pslug, name, cat, mode in jobs:
         continue
     logo = LOGO if mode == 'dual' else ''
     desc = 'Design on the back, little MH mark on the chest.' if mode == 'dual' else 'Bold front print on a soft heavy-cotton tee.'
-    pub = subprocess.run([sys.executable, 'scripts/publish_store.py', '--brand', 'madd_hatchery',
-                          '--concept', cslug, '--product', 'tee', '--slug', pslug, '--name', name,
-                          '--category', cat, '--price', '28', '--description', desc, '--logo', logo, '--api', API],
-                         cwd=str(ROOT), capture_output=True, text=True, timeout=600)
+    cmd = [sys.executable, 'scripts/publish_store.py', '--brand', 'madd_hatchery',
+           '--concept', cslug, '--product', 'tee', '--slug', pslug, '--name', name,
+           '--category', cat, '--price', '28', '--description', desc, '--logo', logo, '--api', API]
+    if args.dump_dir:
+        cmd += ['--dump-dir', args.dump_dir]
+    pub = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=600)
     for ln in pub.stdout.splitlines():
-        if any(k in ln for k in ('blueprint', 'printify product', 'mockups:', 'published')):
+        if any(k in ln for k in ('blueprint', 'printify product', 'mockups:', 'published', 'dumped')):
             print('  ' + ln)
     if pub.returncode != 0:
         print('  !! publish FAILED rc', pub.returncode, '\n  ' + '\n  '.join((pub.stderr or '').splitlines()[-6:]))
