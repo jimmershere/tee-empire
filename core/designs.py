@@ -134,6 +134,21 @@ from .models import Brand, Concept, Design
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 MOCKUP_DIR = DATA_DIR / "mockups"
 MOCKUP_DIR.mkdir(parents=True, exist_ok=True)
+ART_DIR = DATA_DIR / "art"          # raw transparent print files (for real Printify products)
+ART_DIR.mkdir(parents=True, exist_ok=True)
+
+# Real downloaded product blanks (transparent PNGs) for the email line.
+_PORTWRIGHT_ASSETS = Path(__file__).resolve().parents[1] / "brands" / "portwright_email" / "assets"
+
+
+def _blank_asset(name: str) -> Optional["Image.Image"]:
+    p = _PORTWRIGHT_ASSETS / name
+    if _PIL_AVAILABLE and p.exists():
+        try:
+            return Image.open(p).convert("RGBA")
+        except Exception:
+            return None
+    return None
 
 
 def design_from_concept(brand: Brand, concept: Concept) -> Design:
@@ -385,28 +400,20 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
     Returns the updated Design.
     """
     pt = product_type or (concept.extra or {}).get("product_type") or "shirt"
-    # Brand-mascot reference (img2img): if the brand ships a character fixture,
-    # use it for brand-character lanes (e.g. madd_style) so the mascot stays
-    # consistent. Novelty lanes (nickel/drops) stay text-to-image.
-    reference_png = None
-    try:
-        from empire.core import brands as _brands_mod
-        lane = (getattr(concept, "lane", "") or "").lower()
-        cextra = getattr(concept, "extra", None) or {}
-        override = cextra.get("character_ref")  # per-concept reference (e.g. an alt mascot)
-        if override and Path(override).exists():
-            reference_png = Path(override).read_bytes()
-        else:
-            char_path = _brands_mod.brand_dir(brand.slug) / "fixtures" / "character.png"
-            if char_path.exists() and not any(k in lane for k in ("nickel", "novelty", "drops")):
-                reference_png = char_path.read_bytes()
-    except Exception:
-        reference_png = None
-    variants, art_source = images.generate_design_variants(
-        design.design_text, concept.design_prompt,
-        backend=backend, text_color=_to_hex(design.text_color),
-        shirt_color=_to_hex(design.shirt_color), reference_png=reference_png, dry_run=dry_run,
-    )
+    # Portwright Email Translations: art is deterministic typography rendered
+    # from the concept's email_lingo spec — no image model, words guaranteed
+    # correct. Bypass the backend + the vision judge entirely.
+    el_spec = (concept.extra or {}).get("email_lingo") if hasattr(concept, "extra") else None
+    if el_spec:
+        from . import email_lingo
+        art = email_lingo.render_design(el_spec, product_type=pt)
+        variants, art_source = [art], f"email_lingo:{el_spec.get('style', 'card')}"
+    else:
+        variants, art_source = images.generate_design_variants(
+            design.design_text, concept.design_prompt,
+            backend=backend, text_color=_to_hex(design.text_color),
+            shirt_color=_to_hex(design.shirt_color), dry_run=dry_run,
+        )
 
     # If the concept declared a text overlay, paint it onto every variant
     # BEFORE judging so the judge sees the final design.
@@ -421,9 +428,14 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
                 kwargs[k] = overlay[k]
         variants = [overlay_text_panel(v, **kwargs) for v in variants]
 
-    # Rank variants — Claude vision judge first, OCR fallback.
-    judge_ranked = judge.rank_variants(variants, design.design_text, brand_voice=brand.voice)
-    primary_idx, primary_score, primary_rationale = judge_ranked[0]
+    # Rank variants — Claude vision judge first, OCR fallback. Deterministic
+    # email-lingo art is text-perfect by construction, so skip the judge.
+    if el_spec:
+        primary_idx, primary_score, primary_rationale = 0, 1.0, "email-lingo deterministic render"
+        judge_ranked = [(0, 1.0, primary_rationale)]
+    else:
+        judge_ranked = judge.rank_variants(variants, design.design_text, brand_voice=brand.voice)
+        primary_idx, primary_score, primary_rationale = judge_ranked[0]
     ranked = [(idx, score) for idx, score, _ in judge_ranked]
 
     # Save mockups for all variants, primary gets the canonical filename.
@@ -437,10 +449,10 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
                 mockup = _compose_mug_mockup(variants[orig_idx], design.shirt_color)
             elif pt == "sticker":
                 mockup = _compose_sticker_mockup(variants[orig_idx])
-            elif pt == "bottle":
-                mockup = _compose_bottle_mockup(variants[orig_idx], design.shirt_color)
             elif pt == "poster":
                 mockup = _compose_poster_mockup(variants[orig_idx])
+            elif pt == "card":
+                mockup = _compose_card_mockup(variants[orig_idx])
             else:
                 mockup = _compose_shirt_mockup(variants[orig_idx], design.shirt_color)
             mockup.save(out_path, format="PNG")
@@ -449,6 +461,14 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
         variant_paths.append(str(out_path))
         if rank == 0:
             primary_path = out_path
+            # Retain the raw transparent design art (the print file for Printify).
+            art_path = ART_DIR / f"{brand.slug}__{concept.slug}.png"
+            try:
+                art_path.write_bytes(variants[orig_idx])
+                design.extra = (getattr(design, "extra", None) or {})
+                design.extra["print_art"] = str(art_path)
+            except Exception:
+                pass
 
     design.mockup_path = str(primary_path) if primary_path else None
     design.source = f"compositor:{art_source}:{pt}"
@@ -463,90 +483,117 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
 
 
 def _compose_shirt_mockup(art_png: bytes, shirt_color: str) -> "Image.Image":
-    """Composite design art onto a flat t-shirt silhouette."""
+    """Composite design art onto a real blank t-shirt photo (falls back to a
+    drawn silhouette if the downloaded blank is missing)."""
+    art = Image.open(BytesIO(art_png)).convert("RGBA")
+    blank = _blank_asset("blank_tshirt.png")
+    if blank is not None:
+        scale = 1600 / blank.width
+        tee = blank.resize((1600, int(blank.height * scale)), Image.LANCZOS)
+        bg = Image.new("RGB", tee.size, (250, 249, 245))
+        bg.paste(tee, (0, 0), tee)
+        # Chest print area: centered, upper-middle of the shirt.
+        art_w = int(tee.width * 0.40)
+        art_h = int(art.height * (art_w / art.width))
+        art_r = art.resize((art_w, art_h), Image.LANCZOS)
+        pos = ((tee.width - art_w) // 2, int(tee.height * 0.30))
+        bg.paste(art_r, pos, art_r)
+        return bg
     canvas_w, canvas_h = 1600, 1800
     bg = Image.new("RGB", (canvas_w, canvas_h), (245, 245, 240))
-    shirt_rgb = _parse_color(shirt_color)
-    shirt = _draw_shirt(canvas_w, canvas_h, shirt_rgb)
+    shirt = _draw_shirt(canvas_w, canvas_h, _parse_color(shirt_color))
     bg.paste(shirt, (0, 0), shirt)
-    art = Image.open(BytesIO(art_png)).convert("RGBA")
     art_w = int(canvas_w * 0.42)
     art_h = int(art.height * (art_w / art.width))
-    art = art.resize((art_w, art_h), Image.LANCZOS)
-    pos = ((canvas_w - art_w) // 2, int(canvas_h * 0.32))
-    bg.paste(art, pos, art if art.mode == "RGBA" else None)
+    art_r = art.resize((art_w, art_h), Image.LANCZOS)
+    bg.paste(art_r, ((canvas_w - art_w) // 2, int(canvas_h * 0.32)), art_r)
     return bg
 
 
 def _compose_mug_mockup(art_png: bytes, mug_color: str = "#222") -> "Image.Image":
-    """Simple mug mockup: cylinder body + handle + centered art (for 11-15oz)."""
-    canvas_w, canvas_h = 1400, 1200
-    bg = Image.new("RGB", (canvas_w, canvas_h), (245, 245, 240))
-    mug_rgb = _parse_color(mug_color)
-    # body (rounded rect)
+    """Clean white ceramic-mug mockup: shaded cylinder body + ring handle + a
+    contact shadow, with the art on the front print area."""
+    canvas_w, canvas_h = 1500, 1150
+    bg = Image.new("RGB", (canvas_w, canvas_h), (250, 249, 245))
     d = ImageDraw.Draw(bg)
-    body = [300, 200, 1100, 1000]
-    d.rounded_rectangle(body, radius=80, fill=mug_rgb + (255,) if hasattr(d, 'rounded_rectangle') else mug_rgb)
-    # handle
-    d.ellipse([1050, 350, 1250, 650], outline=mug_rgb, width=28)
-    d.ellipse([1080, 380, 1220, 620], fill=(245, 245, 240))
-    # art centered on body
+    bx0, by0, bx1, by1 = 360, 230, 1120, 940
+    # contact shadow
+    d.ellipse([bx0 - 10, by1 - 40, bx1 + 60, by1 + 70], fill=(225, 223, 216))
+    # ring handle (right side)
+    d.ellipse([bx1 - 30, 380, bx1 + 210, 720], outline=(214, 214, 210), width=46)
+    # body
+    d.rounded_rectangle([bx0, by0, bx1, by1], radius=46, fill=(255, 255, 255),
+                        outline=(208, 208, 204), width=3)
+    # curvature shading: darker near both vertical edges
+    shade = Image.new("L", (bx1 - bx0, by1 - by0), 0)
+    sd = ImageDraw.Draw(shade)
+    w = bx1 - bx0
+    for i in range(w):
+        edge = min(i, w - 1 - i) / (w / 2)        # 0 at edges → 1 at center
+        sd.line([(i, 0), (i, by1 - by0)], fill=int(38 * (1 - edge) ** 1.6))
+    bg.paste(Image.new("RGB", shade.size, (120, 122, 126)), (bx0, by0), shade)
+    # top rim (opening)
+    d.ellipse([bx0, by0 - 18, bx1, by0 + 52], fill=(244, 244, 242), outline=(205, 205, 201), width=3)
+    d.ellipse([bx0 + 24, by0 - 6, bx1 - 24, by0 + 40], fill=(232, 232, 230))
+    # art on the front print area
     art = Image.open(BytesIO(art_png)).convert("RGBA")
-    aw = int(420)
+    aw = int((bx1 - bx0) * 0.66)
     ah = int(art.height * (aw / art.width))
-    art = art.resize((aw, ah), Image.LANCZOS)
-    pos = (int((body[0] + body[2]) / 2 - aw / 2), int((body[1] + body[3]) / 2 - ah / 2))
-    bg.paste(art, pos, art if art.mode == "RGBA" else None)
+    max_h = int((by1 - by0) * 0.74)
+    if ah > max_h:
+        ah = max_h; aw = int(art.width * (ah / art.height))
+    pos = (int((bx0 + bx1) / 2 - aw / 2 - 10), int((by0 + by1) / 2 - ah / 2 + 18))
+    art_r = art.resize((aw, ah), Image.LANCZOS)
+    bg.paste(art_r, pos, art_r)
+    return bg
+
+
+def _compose_card_mockup(art_png: bytes) -> "Image.Image":
+    """Greeting/postcard mockup: a white card with a soft shadow and the art
+    inset behind a thin border. Landscape, suits the wide email-scene art."""
+    art = Image.open(BytesIO(art_png)).convert("RGB")
+    pad = int(art.width * 0.06)
+    cw, ch = art.width + 2 * pad, art.height + 2 * pad
+    margin = int(cw * 0.06)
+    canvas_w, canvas_h = cw + 2 * margin, ch + 2 * margin
+    bg = Image.new("RGB", (canvas_w, canvas_h), (236, 234, 228))
+    d = ImageDraw.Draw(bg)
+    # drop shadow
+    sh = 18
+    d.rounded_rectangle([margin + sh, margin + sh, margin + cw + sh, margin + ch + sh],
+                        radius=24, fill=(205, 202, 195))
+    # card
+    d.rounded_rectangle([margin, margin, margin + cw, margin + ch], radius=24,
+                        fill=(255, 255, 255), outline=(208, 205, 197), width=3)
+    bg.paste(art, (margin + pad, margin + pad))
+    # thin keyline around the art
+    d.rectangle([margin + pad, margin + pad, margin + pad + art.width, margin + pad + art.height],
+                outline=(225, 222, 214), width=2)
     return bg
 
 
 def _compose_sticker_mockup(art_png: bytes) -> "Image.Image":
-    """Circular sticker / die-cut style with white border."""
-    canvas = 1100
-    bg = Image.new("RGB", (canvas, canvas), (245, 245, 240))
-    d = ImageDraw.Draw(bg)
-    cx = canvas // 2
-    # outer white border
-    d.ellipse([50, 50, canvas-50, canvas-50], fill=(255, 255, 255))
-    # inner circle for art
-    d.ellipse([90, 90, canvas-90, canvas-90], fill=(30, 30, 30))
+    """Die-cut rounded-square sticker: a single white sticker with a die-cut
+    border and a soft drop shadow (one sticker type, no circle)."""
     art = Image.open(BytesIO(art_png)).convert("RGBA")
-    aw = int(canvas * 0.72)
-    ah = int(art.height * (aw / art.width))
-    art = art.resize((aw, ah), Image.LANCZOS)
-    pos = ((canvas - aw) // 2, (canvas - ah) // 2)
-    bg.paste(art, pos, art if art.mode == "RGBA" else None)
-    # subtle cut line
-    d.ellipse([70, 70, canvas-70, canvas-70], outline=(200, 200, 200), width=3)
-    return bg
-
-
-def _compose_bottle_mockup(art_png: bytes, bottle_color: str = "#1b6f74") -> "Image.Image":
-    """Insulated water-bottle mockup: tall rounded body + cap + centered art."""
-    canvas_w, canvas_h = 1200, 1600
-    bg = Image.new("RGB", (canvas_w, canvas_h), (245, 245, 240))
+    border = int(art.width * 0.05)
+    sw, sh = art.width + 2 * border, art.height + 2 * border
+    margin = int(sw * 0.08)
+    canvas_w, canvas_h = sw + 2 * margin, sh + 2 * margin
+    bg = Image.new("RGB", (canvas_w, canvas_h), (250, 249, 245))
     d = ImageDraw.Draw(bg)
-    col = _parse_color(bottle_color)
-    cx = canvas_w // 2
-    # body
-    body = [cx - 290, 360, cx + 290, 1480]
-    if hasattr(d, "rounded_rectangle"):
-        d.rounded_rectangle(body, radius=140, fill=col)
-    else:
-        d.rectangle(body, fill=col)
-    # shoulder + neck + cap
-    d.rounded_rectangle([cx - 150, 230, cx + 150, 410], radius=40, fill=col)
-    d.rounded_rectangle([cx - 110, 120, cx + 110, 260], radius=30, fill=(38, 38, 42))
-    # subtle highlight stripe
-    d.rounded_rectangle([cx - 250, 420, cx - 200, 1420], radius=30, fill=(255, 255, 255, 0) if False else (
-        min(col[0] + 40, 255), min(col[1] + 40, 255), min(col[2] + 40, 255)))
-    # art centered on body
-    art = Image.open(BytesIO(art_png)).convert("RGBA")
-    aw = int(440)
-    ah = int(art.height * (aw / art.width))
-    art = art.resize((aw, ah), Image.LANCZOS)
-    pos = (int(cx - aw / 2), int((body[1] + body[3]) / 2 - ah / 2))
-    bg.paste(art, pos, art if art.mode == "RGBA" else None)
+    rad = int(sw * 0.07)
+    off = 16
+    # drop shadow
+    d.rounded_rectangle([margin + off, margin + off, margin + sw + off, margin + sh + off],
+                        radius=rad, fill=(223, 221, 214))
+    # white die-cut sticker
+    d.rounded_rectangle([margin, margin, margin + sw, margin + sh], radius=rad,
+                        fill=(255, 255, 255))
+    # dashed-ish die-cut keyline just inside the edge
+    d.rounded_rectangle([margin + 6, margin + 6, margin + sw - 6, margin + sh - 6],
+                        radius=rad - 6, outline=(206, 204, 197), width=3)
+    bg.paste(art, (margin + border, margin + border), art)
     return bg
 
 
