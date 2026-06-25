@@ -64,6 +64,8 @@ def main():
     ap.add_argument("--sizes", default=""); ap.add_argument("--description", default="")
     ap.add_argument("--api", default=os.getenv("MADDHATCHERY_API_URL", "https://maddhatchery.com"))
     ap.add_argument("--printify-product", default=None)
+    ap.add_argument("--logo", default="/app/maddhatch/public/assets/v3/logo_2026.png",
+                    help="front-left-chest trademark logo (apparel only)")
     args = ap.parse_args()
 
     token = os.environ["MADDHATCHERY_ADMIN_TOKEN"]
@@ -73,8 +75,18 @@ def main():
     sizes = [s.strip() for s in args.sizes.split(",") if s.strip()] or DEFAULT_SIZES.get(args.product, ["One Size"])
 
     c = P.PrintifyClient(shop_id=os.environ.get("PRINTIFY_SHOP_ID"))
-    prov = c.list_print_providers(bp); pl = prov if isinstance(prov, list) else prov.get("data", prov); PID = pl[0]["id"]
-    vs = c.list_variants(bp, PID); vl = vs.get("variants") if isinstance(vs, dict) else vs
+    prov = c.list_print_providers(bp); pl = prov if isinstance(prov, list) else prov.get("data", prov)
+    # Pick the print provider that carries the most of our wanted colors (provider order isn't stable).
+    best = None
+    for prv in pl:
+        try:
+            v2 = c.list_variants(bp, prv["id"]); l2 = v2.get("variants") if isinstance(v2, dict) else v2
+            cov = len([c0 for c0 in want_colors if c0 in {x.get("options", {}).get("color") for x in (l2 or [])}])
+            if best is None or cov > best[1]: best = (prv["id"], cov, l2)
+            if cov >= len(want_colors): break
+        except Exception:
+            continue
+    PID, _, vl = best
     have = {v.get("options", {}).get("color") for v in vl}
     colors = [c0 for c0 in want_colors if c0 in have][:8] or sorted([x for x in have if x])[:8]
 
@@ -85,19 +97,34 @@ def main():
             matrix.setdefault(col, {})[sz or "One Size"] = v["id"]; vids.append(v["id"])
     print(f"blueprint {bp} provider {PID}: {len(colors)} colors x {len(sizes)} sizes = {len(vids)} variants")
 
+    # apparel (tee/tiedye): design on the BACK + small MH logo on the front-left chest.
+    dual = args.product in ("tee", "tiedye") and args.logo and Path(args.logo).exists()
     if args.printify_product:
         prod_id = args.printify_product
     else:
         art = (ROOT / "data" / "art" / f"{args.brand}__{args.concept}.png").read_bytes()
-        up = c.upload_image(f"{args.slug}-print.png", art, dry_run=False)
-        res = c.create_product(title=args.name, description=args.description or args.name, blueprint_id=bp,
-                               variant_ids=vids, image_id=up["id"], print_provider_id=PID,
-                               tags=["madd hatchery"], price_cents=price_cents, dry_run=False, product_type=args.product)
+        design_id = c.upload_image(f"{args.slug}-print.png", art, dry_run=False)["id"]
+        if dual:
+            logo_id = c.upload_image(f"{args.slug}-logo.png", Path(args.logo).read_bytes(), dry_run=False)["id"]
+            placements = [
+                {"position": "back", "image_id": design_id, "x": 0.5, "y": 0.5, "scale": 0.95},
+                {"position": "front", "image_id": logo_id, "x": 0.30, "y": 0.27, "scale": 0.16},
+            ]
+            res = c.create_product(title=args.name, description=args.description or args.name, blueprint_id=bp,
+                                   variant_ids=vids, print_provider_id=PID, tags=["madd hatchery"],
+                                   price_cents=price_cents, dry_run=False, product_type=args.product, placements=placements)
+        else:
+            res = c.create_product(title=args.name, description=args.description or args.name, blueprint_id=bp,
+                                   variant_ids=vids, image_id=design_id, print_provider_id=PID,
+                                   tags=["madd hatchery"], price_cents=price_cents, dry_run=False, product_type=args.product)
         prod_id = res["id"]
-    print("printify product:", prod_id)
+    print("printify product:", prod_id, "| dual-placement:", dual)
 
     full = c._request("GET", f"/shops/{c.shop_id}/products/{prod_id}.json")
-    imgs = [im for im in full.get("images", []) if im.get("position") == "front"] or full.get("images", [])
+    # The design lives on the BACK for dual-placement apparel — show that to shoppers.
+    want_pos = "back" if dual else "front"
+    imgs = [im for im in full.get("images", []) if im.get("position") == want_pos] \
+        or [im for im in full.get("images", []) if im.get("position") == "front"] or full.get("images", [])
 
     # color-map the front mockups by sampling the garment color
     named_rgb = {col: tuple(int(COLOR_HEX.get(col, "#888888").lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) for col in colors}
