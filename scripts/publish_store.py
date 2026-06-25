@@ -54,6 +54,57 @@ def shirt_rgb(png):
     return tuple(sum(c[i] for c in rs) // len(rs) for i in range(3))
 
 
+REMBG_VENV = os.environ.get("REMBG_PY", "/tmp/rembg-venv/bin/python")
+
+
+def transparent_pngs(png_list):
+    """Strip the white/studio background from each mockup -> transparent RGBA PNG.
+
+    rembg (U2Net) handles light AND dark shirts (unlike corner-floodfill, which eats
+    white garments). One venv subprocess loads the model once and processes the whole
+    batch. Falls back to the original bytes (composited on white) if rembg is unavailable.
+    """
+    if not png_list:
+        return []
+    import subprocess, tempfile
+    out_bytes = list(png_list)  # default = original (fallback)
+    if Path(REMBG_VENV).exists():
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            for i, png in enumerate(png_list):
+                (tdp / f"in_{i}.png").write_bytes(png)
+            script = (
+                "import sys,glob,os\n"
+                "from rembg import remove, new_session\n"
+                "d=sys.argv[1]; s=new_session('u2net')\n"
+                "for f in sorted(glob.glob(os.path.join(d,'in_*.png'))):\n"
+                "    o=f.replace('in_','out_')\n"
+                "    open(o,'wb').write(remove(open(f,'rb').read(), session=s))\n"
+            )
+            try:
+                subprocess.run([REMBG_VENV, "-c", script, str(tdp)], check=True,
+                               capture_output=True, timeout=600)
+                for i in range(len(png_list)):
+                    op = tdp / f"out_{i}.png"
+                    if op.exists():
+                        out_bytes[i] = op.read_bytes()
+            except Exception as e:
+                print("  rembg batch failed, using opaque mockups:", str(e)[:120])
+    else:
+        print("  rembg venv missing at", REMBG_VENV, "- using opaque mockups")
+    # downscale + normalize to RGBA PNG for the storefront
+    final = []
+    for b in out_bytes:
+        try:
+            im = Image.open(io.BytesIO(b)).convert("RGBA")
+            im.thumbnail((900, 900), Image.LANCZOS)
+            buf = io.BytesIO(); im.save(buf, "PNG", optimize=True)
+            final.append(buf.getvalue())
+        except Exception:
+            final.append(b)
+    return final
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--brand", required=True); ap.add_argument("--concept", required=True)
@@ -106,9 +157,10 @@ def main():
         design_id = c.upload_image(f"{args.slug}-print.png", art, dry_run=False)["id"]
         if dual:
             logo_id = c.upload_image(f"{args.slug}-logo.png", Path(args.logo).read_bytes(), dry_run=False)["id"]
+            # scale < 1 + y slightly up so the TOP of the art isn't clipped off the print area.
             placements = [
-                {"position": "back", "image_id": design_id, "x": 0.5, "y": 0.5, "scale": 0.95},
-                {"position": "front", "image_id": logo_id, "x": 0.30, "y": 0.27, "scale": 0.16},
+                {"position": "back", "image_id": design_id, "x": 0.5, "y": 0.46, "scale": 0.72},
+                {"position": "front", "image_id": logo_id, "x": 0.31, "y": 0.26, "scale": 0.15},
             ]
             res = c.create_product(title=args.name, description=args.description or args.name, blueprint_id=bp,
                                    variant_ids=vids, print_provider_id=PID, tags=["madd hatchery"],
@@ -116,35 +168,62 @@ def main():
         else:
             res = c.create_product(title=args.name, description=args.description or args.name, blueprint_id=bp,
                                    variant_ids=vids, image_id=design_id, print_provider_id=PID,
-                                   tags=["madd hatchery"], price_cents=price_cents, dry_run=False, product_type=args.product)
+                                   tags=["madd hatchery"], price_cents=price_cents, dry_run=False, product_type=args.product,
+                                   image_transform={"x": 0.5, "y": 0.44, "scale": 0.66})
         prod_id = res["id"]
     print("printify product:", prod_id, "| dual-placement:", dual)
 
-    full = c._request("GET", f"/shops/{c.shop_id}/products/{prod_id}.json")
-    # The design lives on the BACK for dual-placement apparel — show that to shoppers.
-    want_pos = "back" if dual else "front"
-    imgs = [im for im in full.get("images", []) if im.get("position") == want_pos] \
-        or [im for im in full.get("images", []) if im.get("position") == "front"] or full.get("images", [])
+    # Printify renders mockups asynchronously — poll until BOTH positions exist (dual)
+    # or front exists (single), so we don't miss the front-of-shirt view.
+    import time as _time
+    need_back = dual
+    for _try in range(12):
+        full = c._request("GET", f"/shops/{c.shop_id}/products/{prod_id}.json")
+        all_imgs = full.get("images", [])
+        have_front = any(im.get("position") == "front" for im in all_imgs)
+        have_back = any(im.get("position") == "back" for im in all_imgs)
+        if have_front and (have_back or not need_back):
+            break
+        print(f"  waiting for mockups... (front={have_front} back={have_back})")
+        _time.sleep(5)
+    back_imgs = [im for im in all_imgs if im.get("position") == "back"]
+    front_imgs = [im for im in all_imgs if im.get("position") == "front"]
+    # Primary view = where the main design lives (back for dual apparel, else front).
+    primary_imgs = (back_imgs if dual else front_imgs) or front_imgs or all_imgs
+    secondary_imgs = front_imgs if dual else []  # the front-with-chest-logo view
 
-    # color-map the front mockups by sampling the garment color
     named_rgb = {col: tuple(int(COLOR_HEX.get(col, "#888888").lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) for col in colors}
-    color_img = {}
-    for im in imgs:
-        try:
-            png = dl(im["src"]); rgb = shirt_rgb(png)
-            nearest = min(colors, key=lambda col: sum((rgb[i] - named_rgb[col][i]) ** 2 for i in range(3)))
-            if nearest not in color_img:  # first match wins
-                im2 = Image.open(io.BytesIO(png)).convert("RGB"); im2.thumbnail((900, 900), Image.LANCZOS)
-                b = io.BytesIO(); im2.save(b, "JPEG", quality=84, optimize=True)
-                color_img[nearest] = base64.b64encode(b.getvalue()).decode()
-        except Exception as e:
-            print("  img skip:", str(e)[:60])
+
+    def map_by_color(imgs):
+        """Download mockups, map each to the nearest wanted color (sampling the garment)."""
+        out = {}
+        for im in imgs:
+            try:
+                png = dl(im["src"]); rgb = shirt_rgb(png)
+                nearest = min(colors, key=lambda col: sum((rgb[i] - named_rgb[col][i]) ** 2 for i in range(3)))
+                if nearest not in out:
+                    out[nearest] = png
+            except Exception as e:
+                print("  img skip:", str(e)[:60])
+        return out
+
+    primary_raw = map_by_color(primary_imgs)
+    secondary_raw = map_by_color(secondary_imgs) if secondary_imgs else {}
+    print(f"  mockups: back={len(back_imgs)} front={len(front_imgs)} mapped primary={len(primary_raw)} front={len(secondary_raw)}")
+
+    # Transparent backgrounds for ALL mockups (rembg handles light AND dark shirts).
+    keys = list(primary_raw.keys()); skeys = list(secondary_raw.keys())
+    allpng = [primary_raw[k] for k in keys] + [secondary_raw[k] for k in skeys]
+    tp = transparent_pngs(allpng)
+    primary_b64 = {keys[i]: base64.b64encode(tp[i]).decode() for i in range(len(keys))}
+    secondary_b64 = {skeys[i]: base64.b64encode(tp[len(keys) + i]).decode() for i in range(len(skeys))}
 
     variants = [{"printify_variant_id": matrix[col][sz], "color": col, "size": sz, "price_cents": price_cents}
                 for col in matrix for sz in matrix[col]]
-    colors_payload = [{"name": col, "hex": COLOR_HEX.get(col, "#999999"),
-                       "image_base64": color_img.get(col), "image_ext": "jpg"}
-                      for col in colors if color_img.get(col)]
+    colors_payload = [{"name": col, "hex": COLOR_HEX.get(col, "#999999"), "image_ext": "png",
+                       "image_base64": primary_b64.get(col),
+                       "front_image_base64": secondary_b64.get(col)}
+                      for col in colors if primary_b64.get(col)]
     payload = {"slug": args.slug, "name": args.name, "category": args.category,
                "description": args.description, "price_cents": price_cents, "quantity": 999,
                "printify_product_id": prod_id, "variants": variants, "colors": colors_payload}

@@ -101,12 +101,17 @@ def generate_design_variants(design_text: str, design_prompt: str, *,
     if dry_run or backend == "placeholder":
         return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder"
     if backend == "openai":
-        try:
-            if reference_png:
-                return [_openai_edit_image(reference_png, _character_edit_instruction(design_prompt), size)], "openai-edit"
-            return [_openai_image(design_prompt, size)], "openai"
-        except Exception:
-            return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
+        last_err = None
+        for _attempt in range(3):  # retry transient failures instead of silently shipping a text placeholder
+            try:
+                if reference_png:
+                    return [_openai_edit_image(reference_png, _character_edit_instruction(design_prompt), size)], "openai-edit"
+                return [_openai_image(design_prompt, size)], "openai"
+            except Exception as e:
+                last_err = e
+        import sys as _sys
+        print(f"[images] openai failed after retries: {last_err}", file=_sys.stderr)
+        return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
     if backend == "comfyui":
         try:
             imgs = _comfyui_images(design_prompt, size)
