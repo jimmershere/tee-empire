@@ -409,10 +409,27 @@ def build_mockup(brand: Brand, concept: Concept, design: Design, *,
         art = email_lingo.render_design(el_spec, product_type=pt)
         variants, art_source = [art], f"email_lingo:{el_spec.get('style', 'card')}"
     else:
+        # Brand-mascot reference (img2img): use a per-concept character_ref, else the
+        # brand's fixtures/character.png, for character lanes (not novelty/drops).
+        # This is the higher-quality path (gpt-image edits) that kept Trish on-model.
+        reference_png = None
+        try:
+            from empire.core import brands as _brands_mod
+            lane = (getattr(concept, "lane", "") or "").lower()
+            cextra = getattr(concept, "extra", None) or {}
+            override = cextra.get("character_ref")
+            if override and Path(override).exists():
+                reference_png = Path(override).read_bytes()
+            else:
+                char_path = _brands_mod.brand_dir(brand.slug) / "fixtures" / "character.png"
+                if char_path.exists() and not any(k in lane for k in ("nickel", "novelty", "drops")):
+                    reference_png = char_path.read_bytes()
+        except Exception:
+            reference_png = None
         variants, art_source = images.generate_design_variants(
             design.design_text, concept.design_prompt,
             backend=backend, text_color=_to_hex(design.text_color),
-            shirt_color=_to_hex(design.shirt_color), dry_run=dry_run,
+            shirt_color=_to_hex(design.shirt_color), reference_png=reference_png, dry_run=dry_run,
         )
 
     # If the concept declared a text overlay, paint it onto every variant
