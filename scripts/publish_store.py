@@ -54,10 +54,61 @@ def shirt_rgb(png):
     return tuple(sum(c[i] for c in rs) // len(rs) for i in range(3))
 
 
-REMBG_VENV = os.environ.get("REMBG_PY", "/tmp/rembg-venv/bin/python")
+REMBG_VENV = os.environ.get("REMBG_PY", str(Path.home() / ".venvs" / "rembg" / "bin" / "python"))
 
 
-def transparent_pngs(png_list):
+def floodfill_transparent(png, thresh=232):
+    """Make ONLY the edge-connected white border of a PRINT graphic transparent.
+
+    Unlike rembg (which segments the salient subject and would drop a design's badge
+    ring / title text), this clears just the outer studio-white background that the
+    image model paints, preserving the full composition. Correct because we prompt
+    the model for a 'plain solid-white background'. Runs a numpy BFS in the rembg
+    venv (numpy + PIL present); returns the original bytes if anything fails.
+    """
+    if not Path(REMBG_VENV).exists():
+        return png
+    import subprocess, tempfile
+    script = (
+        "import sys, numpy as np\n"
+        "from PIL import Image\n"
+        "from collections import deque\n"
+        "src, dst, th = sys.argv[1], sys.argv[2], int(sys.argv[3])\n"
+        "im = Image.open(src).convert('RGBA'); a = np.array(im)\n"
+        "h, w = a.shape[:2]\n"
+        "white = (a[:,:,0] >= th) & (a[:,:,1] >= th) & (a[:,:,2] >= th)\n"
+        "seen = np.zeros((h, w), bool); q = deque()\n"
+        "for x in range(w):\n"
+        "    for y in (0, h-1):\n"
+        "        if white[y, x] and not seen[y, x]: seen[y, x] = True; q.append((y, x))\n"
+        "for y in range(h):\n"
+        "    for x in (0, w-1):\n"
+        "        if white[y, x] and not seen[y, x]: seen[y, x] = True; q.append((y, x))\n"
+        "while q:\n"
+        "    y, x = q.popleft()\n"
+        "    for dy, dx in ((1,0),(-1,0),(0,1),(0,-1)):\n"
+        "        ny, nx = y+dy, x+dx\n"
+        "        if 0 <= ny < h and 0 <= nx < w and white[ny, nx] and not seen[ny, nx]:\n"
+        "            seen[ny, nx] = True; q.append((ny, nx))\n"
+        "a[:,:,3] = np.where(seen, 0, a[:,:,3])\n"
+        "out = Image.fromarray(a)\n"
+        "bb = out.getbbox()\n"                      # tight crop to artwork so print scale isn't wasted on margins
+        "if bb: out = out.crop(bb)\n"
+        "out.save(dst)\n"
+    )
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            sp = Path(td) / "in.png"; dp = Path(td) / "out.png"
+            sp.write_bytes(png)
+            subprocess.run([REMBG_VENV, "-c", script, str(sp), str(dp), str(thresh)],
+                           check=True, capture_output=True, timeout=180)
+            return dp.read_bytes()
+    except Exception as e:
+        print("  floodfill failed, using opaque art:", str(e)[:120])
+        return png
+
+
+def transparent_pngs(png_list, max_px=900):
     """Strip the white/studio background from each mockup -> transparent RGBA PNG.
 
     rembg (U2Net) handles light AND dark shirts (unlike corner-floodfill, which eats
@@ -97,7 +148,8 @@ def transparent_pngs(png_list):
     for b in out_bytes:
         try:
             im = Image.open(io.BytesIO(b)).convert("RGBA")
-            im.thumbnail((900, 900), Image.LANCZOS)
+            if max_px:
+                im.thumbnail((max_px, max_px), Image.LANCZOS)
             buf = io.BytesIO(); im.save(buf, "PNG", optimize=True)
             final.append(buf.getvalue())
         except Exception:
@@ -154,12 +206,16 @@ def main():
         prod_id = args.printify_product
     else:
         art = (ROOT / "data" / "art" / f"{args.brand}__{args.concept}.png").read_bytes()
+        # Clear ONLY the outer studio-white from the PRINT graphic so the shirt shows
+        # the art (badge + title intact) with no white box — flood-fill, NOT rembg
+        # (rembg would crop the design down to the central figure).
+        art = floodfill_transparent(art)
         design_id = c.upload_image(f"{args.slug}-print.png", art, dry_run=False)["id"]
         if dual:
             logo_id = c.upload_image(f"{args.slug}-logo.png", Path(args.logo).read_bytes(), dry_run=False)["id"]
             # scale < 1 + y slightly up so the TOP of the art isn't clipped off the print area.
             placements = [
-                {"position": "back", "image_id": design_id, "x": 0.5, "y": 0.46, "scale": 0.72},
+                {"position": "back", "image_id": design_id, "x": 0.5, "y": 0.5, "scale": 0.92},
                 {"position": "front", "image_id": logo_id, "x": 0.31, "y": 0.26, "scale": 0.15},
             ]
             res = c.create_product(title=args.name, description=args.description or args.name, blueprint_id=bp,
@@ -169,7 +225,7 @@ def main():
             res = c.create_product(title=args.name, description=args.description or args.name, blueprint_id=bp,
                                    variant_ids=vids, image_id=design_id, print_provider_id=PID,
                                    tags=["madd hatchery"], price_cents=price_cents, dry_run=False, product_type=args.product,
-                                   image_transform={"x": 0.5, "y": 0.44, "scale": 0.66})
+                                   image_transform={"x": 0.5, "y": 0.46, "scale": 0.86})
         prod_id = res["id"]
     print("printify product:", prod_id, "| dual-placement:", dual)
 
