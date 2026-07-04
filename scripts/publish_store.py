@@ -254,16 +254,24 @@ def main():
     named_rgb = {col: tuple(int(COLOR_HEX.get(col, "#888888").lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) for col in colors}
 
     def map_by_color(imgs):
-        """Download mockups, map each to the nearest wanted color (sampling the garment)."""
-        out = {}
+        """Map each mockup to a wanted color by garment sample — bijective (1:1) so two
+        near colors (e.g. Navy/Royal) can't collide and drop a color under greedy matching."""
+        samples = []  # (png, sampled_rgb)
         for im in imgs:
             try:
-                png = dl(im["src"]); rgb = shirt_rgb(png)
-                nearest = min(colors, key=lambda col: sum((rgb[i] - named_rgb[col][i]) ** 2 for i in range(3)))
-                if nearest not in out:
-                    out[nearest] = png
+                png = dl(im["src"]); samples.append((png, shirt_rgb(png)))
             except Exception as e:
                 print("  img skip:", str(e)[:60])
+        # global nearest-first assignment: each mockup and each colour used at most once
+        pairs = sorted(
+            (sum((rgb[k] - named_rgb[col][k]) ** 2 for k in range(3)), si, col)
+            for si, (_, rgb) in enumerate(samples) for col in colors
+        )
+        out = {}; used = set()
+        for _d, si, col in pairs:
+            if col in out or si in used:
+                continue
+            out[col] = samples[si][0]; used.add(si)
         return out
 
     primary_raw = map_by_color(primary_imgs)
