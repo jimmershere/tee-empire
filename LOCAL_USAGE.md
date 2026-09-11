@@ -1,4 +1,7 @@
-# TeeEmpire — local usage (drop → .206 approval → Etsy)
+# Portwright Press — local usage (drop → .206 approval → Etsy)
+
+> A Portwright product (Built in Port · Proven at Sea). The `empire` CLI command
+> and `EMPIRE_*` env prefix are unchanged.
 
 The pipeline: **drop an image and/or prompt into `inbox/` → it fans out into a
 merch bundle (1 tee listing with 7 color variants × all sizes, 15oz mug, 4"
