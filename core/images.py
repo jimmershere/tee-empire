@@ -26,7 +26,7 @@ import urllib.error
 import uuid
 from io import BytesIO
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -45,6 +45,8 @@ def select_backend() -> str:
     # 3. OpenAI (gpt-image-1)
     # 4. ComfyUI (local)
     # 5. placeholder
+    if os.getenv("GEMINI_API_KEY"):
+        return "gemini"
     if os.getenv("KIEAI_API_KEY"):
         return "kieai"
     if os.getenv("OPENROUTER_API_KEY"):
@@ -101,12 +103,17 @@ def generate_design_variants(design_text: str, design_prompt: str, *,
     if dry_run or backend == "placeholder":
         return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder"
     if backend == "openai":
-        try:
-            if reference_png:
-                return [_openai_edit_image(reference_png, _character_edit_instruction(design_prompt), size)], "openai-edit"
-            return [_openai_image(design_prompt, size)], "openai"
-        except Exception:
-            return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
+        last_err = None
+        for _attempt in range(3):  # retry transient failures instead of silently shipping a text placeholder
+            try:
+                if reference_png:
+                    return [_openai_edit_image(reference_png, _character_edit_instruction(design_prompt), size)], "openai-edit"
+                return [_openai_image(design_prompt, size)], "openai"
+            except Exception as e:
+                last_err = e
+        import sys as _sys
+        print(f"[images] openai failed after retries: {last_err}", file=_sys.stderr)
+        return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
     if backend == "comfyui":
         try:
             imgs = _comfyui_images(design_prompt, size)
@@ -119,12 +126,21 @@ def generate_design_variants(design_text: str, design_prompt: str, *,
             return imgs, "kieai"
         except Exception:
             return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
-    if backend == "openrouter":
-        try:
-            imgs = _openrouter_images(design_prompt, size)
-            return imgs, "openrouter"
-        except Exception:
-            return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
+    if backend in ("gemini", "openrouter"):
+        fn = _gemini_images if backend == "gemini" else _openrouter_images
+        last_err = None
+        for _attempt in range(3):  # retry transient failures before falling back to a text placeholder
+            try:
+                if reference_png:
+                    imgs = fn(_character_edit_instruction(design_prompt), size, reference_png=reference_png)
+                    return imgs, f"{backend}-edit"
+                imgs = fn(design_prompt, size)
+                return imgs, backend
+            except Exception as e:
+                last_err = e
+        import sys as _sys
+        print(f"[images] {backend} failed after retries: {last_err}", file=_sys.stderr)
+        return [_pillow_placeholder(design_text, size, text_color, shirt_color)], "placeholder-fallback"
     # ollama stub (local inference later)
     if backend == "ollama":
         try:
@@ -524,50 +540,128 @@ def _comfy_fetch_image(base: str, img_meta: dict) -> bytes:
 # ---------- OpenRouter (default fallback after Kie.ai) ----------
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
-def _openrouter_images(prompt: str, size: Tuple[int, int]) -> List[bytes]:
-    """OpenRouter image generation (OpenAI-compatible /images/generations for supported models).
-    Uses OPENROUTER_API_KEY. Model via OPENROUTER_IMAGE_MODEL (default: a fast FLUX or SD3 variant).
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+
+def _gemini_images(prompt: str, size: Tuple[int, int],
+                   reference_png: Optional[bytes] = None) -> List[bytes]:
+    """Native Google Gemini (AI Studio) image generation via generateContent.
+
+    gemini-2.5-flash-image ("nano banana") is cheap/free-tier, strong at bold
+    cartoon graphics, and supports an input image (inline_data) for character
+    consistency (img2img). It emits flat RGB — alpha is added later by rembg.
+    Uses GEMINI_API_KEY; model via GEMINI_IMAGE_MODEL.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+    n = int(os.getenv("EMPIRE_OPENROUTER_VARIANTS", os.getenv("EMPIRE_COMFY_VARIANTS", "3")))
+    augmented = (
+        f"{prompt}\n\n"
+        "Output: one clean, print-ready t-shirt graphic. Center the artwork with "
+        "generous margins on a plain solid-white background (it will be cut out). "
+        "No mockup, no shirt, no photo, no frame, no watermark. "
+        "Do not add any words beyond those explicitly requested."
+    )
+    parts: List[Dict[str, Any]] = [{"text": augmented}]
+    if reference_png:
+        parts.append({"inline_data": {"mime_type": "image/png",
+                                      "data": base64.b64encode(reference_png).decode()}})
+
+    def one(_: int) -> bytes:
+        payload = {"contents": [{"parts": parts}],
+                   "generationConfig": {"responseModalities": ["IMAGE"]}}
+        req = urllib.request.Request(
+            f"{GEMINI_API_BASE}/models/{model}:generateContent",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        cand = (body.get("candidates") or [{}])[0]
+        for p in cand.get("content", {}).get("parts", []):
+            blob = p.get("inlineData") or p.get("inline_data")
+            if blob and blob.get("data"):
+                return base64.b64decode(blob["data"])
+        raise RuntimeError(f"Gemini returned no image (model={model}): {str(body)[:160]}")
+
+    out: List[bytes] = []
+    errors: List[Exception] = []
+    with ThreadPoolExecutor(max_workers=min(n, 4)) as pool:
+        futures = [pool.submit(one, i) for i in range(n)]
+        for fut in as_completed(futures):
+            try:
+                out.append(fut.result())
+            except Exception as e:
+                errors.append(e)
+    if not out:
+        raise errors[0] if errors else RuntimeError("Gemini returned no images")
+    return out
+
+
+def _openrouter_images(prompt: str, size: Tuple[int, int],
+                       reference_png: Optional[bytes] = None) -> List[bytes]:
+    """OpenRouter image generation via the CHAT-COMPLETIONS API with image modality.
+
+    OpenRouter has NO /images/generations endpoint (404). Image-output models
+    (e.g. google/gemini-2.5-flash-image, "nano banana") return images through
+    chat/completions when `modalities:["image","text"]` is set; the bytes arrive
+    as a data: URI at choices[0].message.images[*].image_url.url.
+
+    reference_png: when provided, it's attached as an input image so an image-aware
+    model can keep a brand mascot on-model (img2img / editing).
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY not set")
-    model = os.getenv("OPENROUTER_IMAGE_MODEL", "black-forest-labs/flux-schnell")
+    model = os.getenv("OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image")
     n = int(os.getenv("EMPIRE_OPENROUTER_VARIANTS", os.getenv("EMPIRE_COMFY_VARIANTS", "3")))
-    out: List[bytes] = []
-    errors: List[Exception] = []
+    augmented = (
+        f"{prompt}\n\n"
+        "Output: one clean, print-ready t-shirt graphic on a fully TRANSPARENT "
+        "background (alpha, no backdrop). No mockup, no shirt, no photo, no frame, "
+        "no watermark. Do not add any words beyond those explicitly requested."
+    )
+    content: List[Dict[str, Any]] = [{"type": "text", "text": augmented}]
+    if reference_png:
+        ref_uri = "data:image/png;base64," + base64.b64encode(reference_png).decode()
+        content.append({"type": "image_url", "image_url": {"url": ref_uri}})
+
     def one(_: int) -> bytes:
-        w, h = size
-        closest = "1024x1024"
-        if w > h: closest = "1536x1024"
-        elif h > w: closest = "1024x1536"
-        augmented = (
-            f"{prompt}\n\n"
-            "Output: clean print-ready graphic on transparent background. "
-            "No mockup, no shirt, no watermark, no extra text unless in prompt."
-        )
         payload = {
             "model": model,
-            "prompt": augmented,
-            "size": closest,
-            "n": 1,
-            "response_format": "b64_json",
+            "messages": [{"role": "user", "content": content}],
+            "modalities": ["image", "text"],
         }
         req = urllib.request.Request(
-            f"{OPENROUTER_API_BASE}/images/generations",
+            f"{OPENROUTER_API_BASE}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://tee-empire.local",
+                "HTTP-Referer": "https://maddhatchery.com",
                 "X-Title": "tee-empire",
             },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=180) as resp:
             body = json.loads(resp.read().decode("utf-8"))
-        b64 = body["data"][0]["b64_json"]
-        return base64.b64decode(b64)
+        msg = (body.get("choices") or [{}])[0].get("message", {})
+        imgs = msg.get("images") or []
+        if not imgs:
+            raise RuntimeError(f"OpenRouter returned no image (model={model}): {str(msg)[:160]}")
+        url = imgs[0]["image_url"]["url"]
+        if url.startswith("data:"):
+            return base64.b64decode(url.split(",", 1)[1])
+        with urllib.request.urlopen(url, timeout=60) as r:  # http(s) URL fallback
+            return r.read()
+
+    out: List[bytes] = []
+    errors: List[Exception] = []
     with ThreadPoolExecutor(max_workers=min(n, 4)) as pool:
         futures = [pool.submit(one, i) for i in range(n)]
         for fut in as_completed(futures):

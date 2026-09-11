@@ -90,7 +90,8 @@ class PrintifyClient:
                         price_cents: int = 2400,
                         dry_run: bool = False,
                         product_type: Optional[str] = None,
-                        image_transform: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                        image_transform: Optional[Dict[str, Any]] = None,
+                        placements: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         if not self.shop_id and not dry_run:
             raise PrintifyError("PRINTIFY_SHOP_ID is not configured.")
         variant_ids = list(variant_ids)
@@ -105,14 +106,25 @@ class PrintifyClient:
         if image_transform:
             tf.update({k: image_transform[k]
                        for k in ("x", "y", "scale", "angle") if k in image_transform})
+        image_entry: Dict[str, Any] = {}
         if image_id:
-            image_entry: Dict[str, Any] = {"id": image_id, **tf}
+            image_entry = {"id": image_id, **tf}
         elif image_src:
             image_entry = {"src": image_src, **tf}
-        else:
-            raise PrintifyError("create_product requires image_id or image_src.")
+        elif not placements:
+            raise PrintifyError("create_product requires image_id, image_src, or placements.")
         # For non-tee products the "front" placeholder name may differ; Printify accepts "front" for most.
         # Stickers/posters often use a single print area.
+        # Multi-placement (e.g. small logo on front-left chest + big art on the back).
+        # placements: [{position, image_id, x, y, scale, angle}]
+        if placements:
+            placeholders = [{
+                "position": pl["position"],
+                "images": [{"id": pl["image_id"], "x": pl.get("x", 0.5), "y": pl.get("y", 0.5),
+                            "scale": pl.get("scale", 1), "angle": pl.get("angle", 0)}],
+            } for pl in placements if pl.get("image_id")]
+        else:
+            placeholders = [{"position": "front", "images": [image_entry]}]
         payload = {
             "title": title,
             "description": description,
@@ -120,10 +132,7 @@ class PrintifyClient:
             "print_provider_id": print_provider_id,
             "variants": [{"id": vid, "price": int(price_cents), "is_enabled": True}
                          for vid in variant_ids],
-            "print_areas": [{
-                "variant_ids": variant_ids,
-                "placeholders": [{"position": "front", "images": [image_entry]}],
-            }],
+            "print_areas": [{"variant_ids": variant_ids, "placeholders": placeholders}],
             "tags": tags or [],
             "visible": False,
         }
