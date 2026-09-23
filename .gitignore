@@ -20,3 +20,8 @@ inbox/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# BRAND ART IS PRIVATE (PR-5, answered 2026-09-23 — same policy as portrender).
+# Brand FACTS (brand.yaml, lanes/, intake.json) stay tracked; the ARTWORK does not.
+# This repo is public: art committed here is public permanently, forks included.
+brands/*/fixtures/
