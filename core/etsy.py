@@ -40,10 +40,25 @@ class EtsyError(RuntimeError):
 
 class EtsyClient:
     def __init__(self, keystring: Optional[str] = None, oauth_token: Optional[str] = None,
-                 shop_id: Optional[str] = None) -> None:
+                 shop_id: Optional[str] = None, shared_secret: Optional[str] = None) -> None:
         self.keystring = keystring or os.getenv("ETSY_API_KEY")
         self.oauth_token = oauth_token or os.getenv("ETSY_OAUTH_TOKEN")
         self.shop_id = shop_id or os.getenv("ETSY_SHOP_ID")
+        self.shared_secret = shared_secret or os.getenv("ETSY_SHARED_SECRET")
+
+    @property
+    def api_key_header(self) -> Optional[str]:
+        """Value for x-api-key.
+
+        Apps registered with a shared secret must send ``<keystring>:<secret>``;
+        the keystring alone answers 403 "Shared secret is required in x-api-key
+        header." Verified against openapi-ping on 2026-09-23 for app 1518422772535.
+        """
+        if not self.keystring:
+            return None
+        if self.shared_secret and ":" not in self.keystring:
+            return f"{self.keystring}:{self.shared_secret}"
+        return self.keystring
 
     @property
     def configured(self) -> bool:
@@ -66,7 +81,7 @@ class EtsyClient:
         if not self.keystring or not self.oauth_token:
             raise EtsyError("ETSY_API_KEY and ETSY_OAUTH_TOKEN must be configured.")
         headers = {
-            "x-api-key": self.keystring,
+            "x-api-key": self.api_key_header,
             "Authorization": f"Bearer {self.oauth_token}",
             "User-Agent": "tee-empire/1.0",
         }

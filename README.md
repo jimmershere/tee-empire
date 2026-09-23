@@ -100,9 +100,9 @@ Approved drops self-distribute to social — the merch lane owns its own posting
 # Manually promote a mockup (DRAFT by default; --live to publish)
 python3 -m empire promote --image path/to/mockup.png --caption "New drop" --live
 
-# Auto-promote on approve→publish during a Mission Control poll
-python3 -m empire mc-poll --promote                 # draft posts
-python3 -m empire mc-poll --promote --promote-live   # publish for real
+# Auto-promote on approve→publish while shipping
+python3 -m empire ship --brand <slug> --live --promote        # draft posts
+python3 -m empire ship --brand <slug> --live --promote-live   # publish for real
 ```
 
 - Targets all image-capable connected accounts by default (X, LinkedIn, Facebook, TikTok, Instagram). YouTube is excluded for still images.
@@ -168,7 +168,6 @@ When a drop pairs an image **and** a prompt, the prompt **edits** the image (img
 │   ├── etsy.py            Etsy Open API v3 client (OAuth + listings)
 │   ├── postbridge.py      PostBridge social cross-promotion client
 │   ├── local_approval.py  local Flask approval + upload/RENDER gate
-│   ├── mission_control.py .206 picks sync + decision apply (SSH/rsync)
 │   ├── hitl.py            multi-brand Telegram review bot
 │   ├── orchestrator.py    end-to-end pipeline runner
 │   └── fixtures.py        legacy earl-biggers importer

@@ -61,7 +61,7 @@ Keep it friendly and short. Anything missing, use a sensible default and confirm
 3. **Generate** — `python -m empire plan --brand <slug> --per-lane 5`
    then `python -m empire design --brand <slug> --product-type shirt --live`
    (mugs/stickers/bottles: re-run with `--product-type mug|sticker|bottle`).
-4. **Review** — `python -m empire mc-publish --brand <slug>` → approve on floor2.
+4. **Review** — `python -m empire gate --port 3333` → approve in the local browser gate.
 5. **Publish** — on approval: Printify drafts (`empire list --platform printify --live`)
    and/or the storefront (`empire publish-site --brand <slug> --live`).
 6. **QR merch** — logo sticker/mug/bottle with a bottom-left QR → the customer's

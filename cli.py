@@ -183,226 +183,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(json.dumps(summary, indent=2))
     return 0
 
-
-def cmd_mc_publish(args: argparse.Namespace) -> int:
-    from empire.core import mission_control
-    out = mission_control.publish_picks(brand_filter=args.brand or None,
-                                        limit=args.limit)
-    print(json.dumps(out, indent=2))
-    return 0
-
-
-def cmd_mc_poll(args: argparse.Namespace) -> int:
-    """Read decisions from Mission Control, act on each one (publish/reject)."""
-    from empire.core import mission_control
-    from empire.core import printify as printify_mod
-    from empire.core.store import Store
-    from empire.core import brands as brands_mod
-
-    from empire.core import ingest
-    store = Store()
-    decisions = mission_control.fetch_decisions()
-    applied = mission_control.fetch_applied()
-
-    # Hero products eligible for auto social promo (avoids 5 posts per drop).
-    promote_products = {p.strip() for p in
-                        (getattr(args, "promote_products", "") or "tee,tiedye").split(",") if p.strip()}
-
-    # --- refine pass: regenerate draft art from reviewer notes (non-terminal) ---
-    refine_ledger = Path(__file__).resolve().parent / "data" / "refine_processed.json"
-    try:
-        processed_refines = set(json.loads(refine_ledger.read_text())) if refine_ledger.exists() else set()
-    except Exception:
-        processed_refines = set()
-
-    actions: list = []
-    newly_applied: list = []
-    refine_errors: list = []
-    refined_any = False
-    for d in decisions:
-        if d.get("decision") != "refine":
-            continue
-        slug = d.get("slug"); ts = d.get("ts", ""); note = d.get("note", "")
-        key = f"{slug}|{ts}"
-        if not slug or key in processed_refines:
-            continue
-        listings = [l for l in store.list_listings() if l.concept_slug == slug]
-        if not listings:
-            actions.append({"slug": slug, "decision": "refine", "skipped": "no listing"})
-            processed_refines.add(key); continue
-        res = ingest.regenerate_art(listings[0], note, dry_run=not args.live, store=store)
-        actions.append({"slug": slug, "decision": "refine", **res})
-        if res.get("refine") == "applied":
-            # Only mark consumed on success; failures stay queued so a re-run
-            # (after fixing the cause) retries them instead of silently dropping.
-            processed_refines.add(key)
-            refined_any = True
-        else:
-            refine_errors.append({"slug": slug, **{k: res[k] for k in ("refine", "error", "reason") if k in res}})
-    if args.live:  # dry-run is a no-side-effect preview; never consume the queue
-        try:
-            refine_ledger.parent.mkdir(parents=True, exist_ok=True)
-            refine_ledger.write_text(json.dumps(sorted(processed_refines)))
-        except Exception:
-            pass
-
-    # --- add-text pass: stamp literal text onto a print placement (non-terminal) ---
-    addtext_ledger = Path(__file__).resolve().parent / "data" / "addtext_processed.json"
-    try:
-        processed_addtext = set(json.loads(addtext_ledger.read_text())) if addtext_ledger.exists() else set()
-    except Exception:
-        processed_addtext = set()
-    addtext_errors: list = []
-    addtext_any = False
-    for d in decisions:
-        if d.get("decision") != "addtext":
-            continue
-        slug = d.get("slug"); ts = d.get("ts", ""); note = d.get("note", "")
-        key = f"{slug}|{ts}"
-        if not slug or key in processed_addtext:
-            continue
-        try:
-            spec = json.loads(note) if note else {}
-        except Exception:
-            spec = {}
-        listings = [l for l in store.list_listings() if l.concept_slug == slug]
-        if not listings:
-            actions.append({"slug": slug, "decision": "addtext", "skipped": "no listing"})
-            processed_addtext.add(key); continue
-        res = ingest.add_text_to_listing(listings[0], spec, dry_run=not args.live, store=store)
-        actions.append({"slug": slug, "decision": "addtext", **res})
-        if res.get("addtext") == "applied":
-            processed_addtext.add(key)
-            addtext_any = True
-        else:
-            addtext_errors.append({"slug": slug, **{k: res[k] for k in ("addtext", "error", "reason") if k in res}})
-    if args.live:  # dry-run is a no-side-effect preview; never consume the queue
-        try:
-            addtext_ledger.parent.mkdir(parents=True, exist_ok=True)
-            addtext_ledger.write_text(json.dumps(sorted(processed_addtext)))
-        except Exception:
-            pass
-
-    # Latest terminal-decision-per-slug (refine/addtext/unset are non-terminal).
-    latest = {}
-    for d in decisions:
-        slug = d.get("slug")
-        if not slug or d.get("decision") in ("refine", "addtext", "unset"):
-            continue
-        if slug not in latest or d.get("ts", "") > latest[slug].get("ts", ""):
-            latest[slug] = d
-
-    for slug, decision_entry in latest.items():
-        if slug in applied:
-            continue
-        decision = decision_entry.get("decision")
-        # Find the most recent listing for this concept.
-        listings = [l for l in store.list_listings() if l.concept_slug == slug]
-        if not listings:
-            actions.append({"slug": slug, "skipped": "no listing in DB"})
-            continue
-        listing = listings[0]  # newest first
-        try:
-            brand = brands_mod.load_brand(listing.brand)
-        except FileNotFoundError:
-            actions.append({"slug": slug, "skipped": f"brand {listing.brand} missing"})
-            continue
-
-        if decision == "approve":
-            if listing.platform == "printify":
-                client = printify_mod.PrintifyClient(shop_id=brand.printify_shop_id)
-                try:
-                    result = client.publish_product(listing.external_id,
-                                                    dry_run=not args.live)
-                    listing.state = "live" if args.live else "approved-dryrun"
-                    store.upsert_listing(listing)
-                    store.record_review(listing.brand, slug, "approved",
-                                        reviewer="mc-ui")
-                    action = {"slug": slug, "decision": "approve",
-                              "printify_result": result}
-                    # 2nd port: publish the approved design to the maddhatchery.com storefront.
-                    try:
-                        from empire.core import maddhatchery as mh_mod
-                        _design = store.get_design(listing.brand, slug)
-                        _concept = store.get_concept(listing.brand, slug)
-                        if _design and _concept:
-                            action["site_result"] = mh_mod.MaddhatcheryPublisher().publish_design(
-                                _concept, _design, brand, dry_run=not args.live)
-                    except Exception as _se:
-                        action["site_error"] = str(_se)
-                    if args.live and getattr(args, "promote", False):
-                        action["promotion"] = _auto_promote_listing(
-                            listing, store,
-                            products=promote_products,
-                            is_draft=not getattr(args, "promote_live", False))
-                    actions.append(action)
-                    newly_applied.append(slug)
-                except Exception as e:
-                    actions.append({"slug": slug, "decision": "approve",
-                                    "error": str(e)})
-            else:
-                actions.append({"slug": slug, "skipped": f"unsupported platform {listing.platform}"})
-        elif decision == "reject":
-            listing.state = "rejected"
-            store.upsert_listing(listing)
-            store.record_review(listing.brand, slug, "rejected", reviewer="mc-ui")
-            actions.append({"slug": slug, "decision": "reject"})
-            newly_applied.append(slug)
-        elif decision in ("swap_v1", "swap_v2", "swap_v3"):
-            # Promote the chosen variant to primary in the DB. Doesn't re-push
-            # to Printify yet — that's a follow-up (would need update_product).
-            design = store.get_design(listing.brand, slug)
-            if not design:
-                actions.append({"slug": slug, "skipped": "no design row"})
-                continue
-            suffix = f"__{decision.split('_')[1]}.png"
-            for vp in design.variant_paths:
-                if vp.endswith(suffix):
-                    design.mockup_path = vp
-                    store.upsert_design(design)
-                    actions.append({"slug": slug, "decision": decision,
-                                    "new_primary": vp,
-                                    "note": "DB updated; re-run mc-publish + manual Printify image swap to reflect on the live listing"})
-                    newly_applied.append(slug)
-                    break
-            else:
-                actions.append({"slug": slug, "decision": decision,
-                                "skipped": f"variant {suffix} not found"})
-        else:
-            actions.append({"slug": slug, "decision": decision,
-                            "skipped": "unsupported decision"})
-
-    if newly_applied and args.live:
-        mission_control.mark_applied(newly_applied)
-
-    # Push refreshed mockups (refines / variant swaps) back up to the .206 gallery.
-    republish = None
-    if refined_any or addtext_any:
-        try:
-            republish = mission_control.publish_picks(limit=60)
-        except Exception as e:
-            republish = {"error": str(e)}
-
-    print(json.dumps({"decisions_seen": len(latest),
-                      "refines_applied": refined_any,
-                      "refine_errors": refine_errors,
-                      "addtext_applied": addtext_any,
-                      "addtext_errors": addtext_errors,
-                      "republish": republish,
-                      "newly_applied_persisted": len(newly_applied) if args.live else 0,
-                      "would_apply": len(newly_applied) if not args.live else 0,
-                      "actions": actions}, indent=2))
-    if refine_errors:
-        print(f"\n⚠️  {len(refine_errors)} refine(s) FAILED and remain queued:", file=sys.stderr)
-        for e in refine_errors:
-            print(f"   - {e.get('slug')}: {e.get('error') or e.get('reason')}", file=sys.stderr)
-    if addtext_errors:
-        print(f"\n⚠️  {len(addtext_errors)} add-text request(s) FAILED and remain queued:", file=sys.stderr)
-        for e in addtext_errors:
-            print(f"   - {e.get('slug')}: {e.get('error') or e.get('reason')}", file=sys.stderr)
-    return 0
-
-
 def cmd_analytics(args: argparse.Namespace) -> int:
     out = {
         "overview": analytics.empire_overview(),
@@ -472,7 +252,7 @@ def cmd_drop(args: argparse.Namespace) -> int:
     """Process any image/prompt files sitting in the inbox into the default bundle."""
     from empire.core import ingest
     out = ingest.run_once(brand_slug=args.brand, dry_run=not args.live,
-                          backend=args.backend or None, publish=not args.no_publish)
+                          backend=args.backend or None)
     print(json.dumps(out, indent=2, default=str))
     return 0
 
@@ -481,7 +261,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     """Watch the inbox folder and process drops as they land (blocking loop)."""
     from empire.core import ingest
     ingest.watch(brand_slug=args.brand, dry_run=not args.live, backend=args.backend or None,
-                 interval=args.interval, publish=not args.no_publish)
+                 interval=args.interval)
     return 0
 
 
@@ -538,35 +318,6 @@ def cmd_promote(args: argparse.Namespace) -> int:
                                is_draft=not args.live, dry_run=args.dry_run)
     print(json.dumps(out, indent=2, default=str))
     return 0
-
-
-def cmd_mc_open(args: argparse.Namespace) -> int:
-    """Open an SSH tunnel to the .206 Mission Control UI so it's reachable on localhost.
-
-    The MC server binds 127.0.0.1:3333 on .206, so it isn't directly reachable over
-    the LAN. This forwards a local port to it and prints the approval URL.
-    """
-    import os
-    import subprocess
-    host = os.getenv("MC_HOST", "floor2")
-    key = os.getenv("MC_SSH_KEY", str(Path.home() / ".ssh" / "floor2_key"))
-    local_port = args.port
-    url = f"http://localhost:{local_port}/public/empire-picks/index.html"
-    cmd = [
-        "ssh", "-i", key,
-        "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
-        "-o", "ExitOnForwardFailure=yes",
-        "-o", "ServerAliveInterval=30",
-        "-N", "-L", f"{local_port}:127.0.0.1:3333", host,
-    ]
-    print(f"Opening tunnel to Mission Control via {host} …")
-    print(f"  Approval UI:  {url}")
-    print(f"  (leave this running; Ctrl-C to close the tunnel)")
-    try:
-        return subprocess.call(cmd)
-    except KeyboardInterrupt:
-        return 0
-
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="empire", description="Portwright Press — multi-brand print-on-demand merch automation")
@@ -633,21 +384,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("status", help="Show empire DB stats")
     sp.set_defaults(func=cmd_status)
 
-    sp = sub.add_parser("mc-publish", help="Sync picks + regenerate Mission Control HTML")
-    sp.add_argument("--brand")
-    sp.add_argument("--limit", type=int, default=40)
-    sp.set_defaults(func=cmd_mc_publish)
-
-    sp = sub.add_parser("mc-poll", help="Apply Mission Control decisions (approve→publish, reject→close)")
-    sp.add_argument("--live", action="store_true", help="Actually hit Printify; without this it's dry-run")
-    sp.add_argument("--promote", action="store_true",
-                    help="On approve→publish, cross-promote the mockup to social via PostBridge")
-    sp.add_argument("--promote-live", action="store_true",
-                    help="Publish promos for real (default: create DRAFT posts for review)")
-    sp.add_argument("--promote-products", default="tee,tiedye",
-                    help="Comma list of product keys eligible for promo (default tee,tiedye)")
-    sp.set_defaults(func=cmd_mc_poll)
-
     sp = sub.add_parser("analytics", help="Show revenue/funnel/top sellers")
     sp.add_argument("--brand")
     sp.add_argument("--limit", type=int, default=10)
@@ -671,10 +407,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--live", action="store_true", help="Actually POST to the site (otherwise dry-run)")
     sp.set_defaults(func=cmd_publish_site)
 
-    sp = sub.add_parser("drop", help="Process inbox image/prompt drops into the default merch bundle + push to .206")
+    sp = sub.add_parser("drop", help="Process inbox image/prompt drops into the default merch bundle (local only)")
     sp.add_argument("--brand", default="earl_biggers")
     sp.add_argument("--backend", default=None, help="Image backend override (else auto)")
-    sp.add_argument("--no-publish", action="store_true", help="Skip rsync to Mission Control (.206)")
     sp.add_argument("--live", action="store_true", help="Actually create Printify drafts (else dry-run)")
     sp.set_defaults(func=cmd_drop)
 
@@ -682,7 +417,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--brand", default="earl_biggers")
     sp.add_argument("--backend", default=None)
     sp.add_argument("--interval", type=int, default=10, help="Poll seconds")
-    sp.add_argument("--no-publish", action="store_true")
     sp.add_argument("--live", action="store_true")
     sp.set_defaults(func=cmd_watch)
 
@@ -695,10 +429,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--live", action="store_true", help="Publish for real (else create a DRAFT post)")
     sp.add_argument("--dry-run", action="store_true", help="Print what would be posted; no API calls")
     sp.set_defaults(func=cmd_promote)
-
-    sp = sub.add_parser("mc-open", help="Open SSH tunnel to the .206 approval UI (reachable at localhost)")
-    sp.add_argument("--port", type=int, default=3333, help="Local port to forward (default 3333)")
-    sp.set_defaults(func=cmd_mc_open)
 
     return p
 

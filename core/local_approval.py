@@ -1,6 +1,6 @@
 """Local web approval/edit gate for Portwright Press.
 
-Simple, local-only (no ssh, no remote .206). Run with:
+Simple, local-only: no ssh, no remote board. Run with:
   python -m empire.cli gate --port 3333
 
 Provides:
@@ -12,7 +12,8 @@ Provides:
 - Multi-product aware mockup compositing (shirt, mug, sticker, poster).
 
 Uses Flask for the UI (pip install flask if missing). Serves mockups from data/mockups.
-Decisions feed the same store + review records as Telegram / old MC, so `empire ship` etc. work.
+Decisions feed the same store + review records as Telegram did, so `empire ship` etc. work.
+This is now the ONLY approval gate — the remote Mission Control board was removed (TE-10).
 """
 from __future__ import annotations
 
@@ -332,7 +333,7 @@ if _FLASK_AVAILABLE and app is not None:
 
 
 def _ship_one(listing) -> Dict[str, Any]:
-    """Ship a single approved listing. Re-uses the same logic as mc-poll / hitl."""
+    """Ship a single approved listing. Re-uses the same logic as the hitl path."""
     try:
         brand = brands_mod.load_brand(listing.brand)
     except Exception:

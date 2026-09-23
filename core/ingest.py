@@ -3,7 +3,7 @@
 Drop an image and/or a prompt file into the inbox, and this fans it out into
 the default bundle (tee in 7 colors, 15oz mug, 4" sticker, 11x14 poster) as
 Printify drafts, builds preview mockups, and records each as a Listing in the
-store so the existing mc-publish / mc-poll approval loop can carry it to .206
+store so the local approval gate (`empire gate`) can carry it forward
 and on to Printify → Etsy.
 
 Drop conventions (files pair by stem inside the inbox):
@@ -396,7 +396,6 @@ def poll_mockups(brand_slug: str, *, store: Optional[Store] = None,
     so the board visibly fills in. Returns counts. Skips dry-run/errored rows.
     """
     store = store or Store()
-    from . import mission_control
     client = printify_mod.PrintifyClient(shop_id=os.getenv("PRINTIFY_SHOP_ID"))
     deadline = time.time() + total
     filled_total = 0
@@ -426,7 +425,6 @@ def poll_mockups(brand_slug: str, *, store: Optional[Store] = None,
                 filled += 1
         if filled:
             filled_total += filled
-            mission_control.publish_picks(brand_filter=brand_slug, limit=60)
         if time.time() >= deadline:
             break
         time.sleep(interval)
@@ -434,9 +432,13 @@ def poll_mockups(brand_slug: str, *, store: Optional[Store] = None,
 
 
 def run_once(*, brand_slug: str = "earl_biggers", dry_run: bool = True,
-             backend: Optional[str] = None, publish: bool = True,
+             backend: Optional[str] = None,
              store: Optional[Store] = None) -> Dict:
-    """Process every pending drop in the inbox, then (optionally) push to .206."""
+    """Process every pending drop in the inbox. Everything stays on this host.
+
+    Approval is the local gate (`empire gate`), which writes the same store and
+    review records the old remote board did.
+    """
     store = store or Store()
     jobs = discover()
     processed = []
@@ -449,18 +451,13 @@ def run_once(*, brand_slug: str = "earl_biggers", dry_run: bool = True,
         archive_job(job)
         processed.append(res)
     out = {"processed": len(processed), "drops": processed}
-    if processed and publish:
-        from . import mission_control
-        # Show placeholder cards immediately, then fill them in from Printify.
-        out["publish"] = mission_control.publish_picks(brand_filter=brand_slug, limit=60)
-        if not dry_run:
-            out["mockups"] = poll_mockups(brand_slug, store=store)
+    if processed and not dry_run:
+        out["mockups"] = poll_mockups(brand_slug, store=store)
     return out
 
 
 def watch(*, brand_slug: str = "earl_biggers", dry_run: bool = True,
-          backend: Optional[str] = None, interval: int = 10,
-          publish: bool = True) -> None:
+          backend: Optional[str] = None, interval: int = 10) -> None:
     """Poll the inbox forever; process new drops as they land."""
     inbox = inbox_path()
     print(json.dumps({"watching": str(inbox), "interval_s": interval,
@@ -469,7 +466,7 @@ def watch(*, brand_slug: str = "earl_biggers", dry_run: bool = True,
     while True:
         try:
             res = run_once(brand_slug=brand_slug, dry_run=dry_run, backend=backend,
-                          publish=publish, store=store)
+                          store=store)
             if res["processed"]:
                 print(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), **res},
                                  default=str), flush=True)
@@ -482,7 +479,7 @@ def watch(*, brand_slug: str = "earl_biggers", dry_run: bool = True,
 def regenerate_art(listing: Listing, note: str, *, dry_run: bool = True,
                    backend: Optional[str] = None, store: Optional[Store] = None) -> Dict:
     """Apply a reviewer 'refine' note: regenerate/annotate art, update the Printify
-    draft image, and rebuild the preview mockup. Used by `mc-poll` for `refine`.
+    draft image, and rebuild the preview mockup. Used by the `refine` decision.
     """
     store = store or Store()
     ex = listing.extra or {}
@@ -577,7 +574,7 @@ def add_text_to_listing(listing: Listing, spec: Dict, *, dry_run: bool = True,
     ``spec`` = {text, font, color, placement}. Renders the exact words as a
     transparent PNG (no AI reinterpretation), uploads it, and attaches it to the
     chosen placeholder while preserving the draft's full variant set. Used by
-    ``mc-poll`` for the ``addtext`` decision.
+    the ``addtext`` decision in the approval gate.
     """
     store = store or Store()
     text = (spec.get("text") or "").strip()

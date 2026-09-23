@@ -691,12 +691,18 @@ KIEAI_API_BASE = "https://api.kie.ai/api/v1"
 
 def _kieai_via_ssh() -> Optional[List[str]]:
     """If EMPIRE_KIEAI_VIA_SSH is set, return an ssh command prefix to run curl
-    on a whitelisted host. Format: user@host (uses ~/.ssh/floor2_mount key)."""
+    on a whitelisted host (kie.ai keys are IP-bound). Format: user@host.
+
+    Opt-in and host-agnostic: EMPIRE_KIEAI_SSH_KEY must name the key. It used to
+    default to a floor2 key; floor2 is not part of this fleet and that default is
+    gone, so an unset key now fails loudly instead of reaching for a dead host.
+    """
     target = os.getenv("EMPIRE_KIEAI_VIA_SSH", "").strip()
     if not target:
         return None
-    key = os.getenv("EMPIRE_KIEAI_SSH_KEY",
-                    str(Path.home() / ".ssh" / "floor2_mount"))
+    key = os.getenv("EMPIRE_KIEAI_SSH_KEY", "").strip()
+    if not key:
+        raise RuntimeError("EMPIRE_KIEAI_VIA_SSH is set but EMPIRE_KIEAI_SSH_KEY is not")
     return ["ssh", "-i", key,
             "-o", "BatchMode=yes",
             "-o", "IdentitiesOnly=yes",
