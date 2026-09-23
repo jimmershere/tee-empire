@@ -1,0 +1,11 @@
+{
+  "lane": "builds",
+  "seeds": [
+    "Indy 500 truck",
+    "pace car",
+    "Iron Bay",
+    "Northern Light",
+    "Resurrection",
+    "Yellowjacket"
+  ]
+}

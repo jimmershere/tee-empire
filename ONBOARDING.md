@@ -7,6 +7,27 @@ brand, a clemtock ad theme, and a first drop of designs.
 
 ---
 
+## 0. Shortcut: the brand already exists in portrender
+
+If someone has already written `/app/portrender/brands/<slug>.toml` (voice, palette,
+audience, taglines), do not retype any of it — those are the same facts this intake asks
+for, and keying them in twice is how two sources of truth get born:
+
+```bash
+cd /app/tee-empire
+python3 scripts/onboard_from_portrender.py <slug> --dry-run   # see the intake it derives
+python3 scripts/onboard_from_portrender.py <slug>             # scaffold brand + ad theme
+python3 scripts/onboard_from_portrender.py --all              # every brand portrender knows
+```
+
+`au2` and `icenstone` were onboarded this way on 2026-09-23. A brand with no Printify shop
+id still scaffolds and still runs dry-run end to end — which is correct, because guessing a
+shop id would publish products into somebody else's store.
+
+Everything below is the path for a genuinely new customer.
+
+---
+
 ## 1. Intake prompt (run this with the customer)
 
 Paste this to the customer (or to an LLM acting as intake agent). Capture the

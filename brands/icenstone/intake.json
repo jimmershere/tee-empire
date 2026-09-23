@@ -1,0 +1,53 @@
+{
+  "slug": "icenstone",
+  "name": "Ice and Stone",
+  "tagline": "built in ice and stone \u2014 Northern Michigan, Up North, the U.P.",
+  "location": "Traverse City, MI",
+  "site_url": "https://icenstone.grok.me",
+  "voice": "defiant, hardscrabble, cold-forged; terse declaratives, no cute puns; Michigan-vs-all-y'all underdog pride without naming any existing 'vs everybody' brand",
+  "palette": {
+    "primary": "#0b1018",
+    "secondary": "#e9eef2",
+    "accent": "#7fc8e8",
+    "cream": "#4a5560"
+  },
+  "products": [
+    "heavyweight tees",
+    "hoodies",
+    "beanies",
+    "stickers",
+    "enamel mugs"
+  ],
+  "niches": [
+    "heavyweight tees",
+    "hoodies",
+    "beanies",
+    "stickers",
+    "enamel mugs"
+  ],
+  "audiences": {
+    "primary": "Northern Michiganders and Yoopers \u2014 residents, seasonal returners, expats who still say 'up north'"
+  },
+  "lanes": {
+    "house": [
+      "Built In Ice And Stone",
+      "Up North Or Nothing",
+      "Cold-Forged",
+      "Lake Effect Bred",
+      "45th Parallel"
+    ],
+    "places": [
+      "Traverse City",
+      "TVC",
+      "Leelanau",
+      "Old Mission",
+      "Grand Traverse Bay",
+      "Sleeping Bear",
+      "U.P."
+    ]
+  },
+  "commerce": {},
+  "_source": "/app/portrender/brands/icenstone.toml",
+  "_note": "Trademark/licensing caution: no university marks, team names or logos; place names only (NMM-8). Brand still being locked down (domains, USPTO).",
+  "clemtock_theme": "icenstone"
+}

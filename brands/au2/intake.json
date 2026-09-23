@@ -1,0 +1,55 @@
+{
+  "slug": "au2",
+  "name": "Appearance Unlimited",
+  "tagline": "auto body \u00b7 detailing \u00b7 classic restoration \u2014 Traverse City, MI",
+  "location": "Traverse City, MI",
+  "site_url": "https://appearance-unlimited.com",
+  "voice": "shop-floor honest, dry humor, motorsport swagger; the crew, the calipers, the panel gaps you could set a watch to",
+  "palette": {
+    "primary": "#b8121b",
+    "secondary": "#d81a24",
+    "accent": "#7d0d13",
+    "cream": "#f4f4f6"
+  },
+  "products": [
+    "tees (Bella+Canvas 3001, boxy tee 1382)",
+    "accent mugs (635)",
+    "stainless bottles (887)",
+    "kiss-cut stickers (400)",
+    "posters"
+  ],
+  "niches": [
+    "tees (Bella+Canvas 3001, boxy tee 1382)",
+    "accent mugs (635)",
+    "stainless bottles (887)",
+    "kiss-cut stickers (400)",
+    "posters"
+  ],
+  "audiences": {
+    "primary": "gearheads, restoration customers, Northern Michigan car-show crowd"
+  },
+  "lanes": {
+    "designs": [
+      "Panel Gaps Crew \u2014 Panel gaps you could set a watch to.",
+      "TC Original \u2014 Pretty doesn't mean soft.",
+      "Garage Crew \u2014 Unf*ck. Paint. Restore. Repeat."
+    ],
+    "builds": [
+      "Indy 500 truck",
+      "pace car",
+      "Iron Bay",
+      "Northern Light",
+      "Resurrection",
+      "Yellowjacket"
+    ]
+  },
+  "commerce": {},
+  "_source": "/app/portrender/brands/au2.toml",
+  "_note": "Merch masters are NOT kept in the au2 repo (only 520/1000w JPEG+WebP derivatives). Export target 'au2' drops masters into assets/img/merch/masters/ \u2014 gitignore them there. Existing designs: Panel Gaps Crew, TC Original, Garage Crew.",
+  "mascot": {
+    "name": "the crew",
+    "desc": "no single mascot; recurring motifs are the AU car logo, calipers, the SS, a packed cooler and an open toolbox",
+    "ref": "/app/tee-empire/data/art/au2-logo-fun.png"
+  },
+  "clemtock_theme": "au2"
+}

@@ -1,0 +1,28 @@
+slug: au2
+name: Appearance Unlimited
+voice: >-
+  shop-floor honest, dry humor, motorsport swagger; the crew, the calipers, the panel gaps you could set a watch to
+niches:
+  - tees (Bella+Canvas 3001, boxy tee 1382)
+  - accent mugs (635)
+  - stainless bottles (887)
+  - kiss-cut stickers (400)
+  - posters
+palette:
+  - "#b8121b"
+  - "#d81a24"
+  - "#7d0d13"
+  - "#f4f4f6"
+lanes:
+  - designs
+  - builds
+adult_listing_default: false
+pricing:
+  base_usd: 28.0
+printify_shop_id: ""
+printify_blueprint_id: 12
+printify_print_provider_id: 6
+printify_variant_ids: [18100, 18101, 18102, 18103, 18104]
+printify_price_cents: 2800
+etsy_shop_id: null
+review_chat_id: null

@@ -1,0 +1,28 @@
+slug: icenstone
+name: Ice and Stone
+voice: >-
+  defiant, hardscrabble, cold-forged; terse declaratives, no cute puns; Michigan-vs-all-y'all underdog pride without naming any existing 'vs everybody' brand
+niches:
+  - heavyweight tees
+  - hoodies
+  - beanies
+  - stickers
+  - enamel mugs
+palette:
+  - "#0b1018"
+  - "#e9eef2"
+  - "#7fc8e8"
+  - "#4a5560"
+lanes:
+  - house
+  - places
+adult_listing_default: false
+pricing:
+  base_usd: 28.0
+printify_shop_id: ""
+printify_blueprint_id: 12
+printify_print_provider_id: 6
+printify_variant_ids: [18100, 18101, 18102, 18103, 18104]
+printify_price_cents: 2800
+etsy_shop_id: null
+review_chat_id: null
