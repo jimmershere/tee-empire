@@ -25,3 +25,11 @@ __pycache__/
 # Brand FACTS (brand.yaml, lanes/, intake.json) stay tracked; the ARTWORK does not.
 # This repo is public: art committed here is public permanently, forks included.
 brands/*/fixtures/
+
+# venv — this box has no system pip; see docs/fleet-setup.md
+.venv/
+venv/
+
+# Loose brand art at the repo root falls under the same PR-5 policy as
+# brands/*/fixtures/ — this repo is public, so artwork never lands in it.
+au2-logo-fun.png
