@@ -112,9 +112,18 @@ silently fix* — so it is recorded here and left alone.
 **It does not block merch work.** `scripts/publish_merch_draft.py` makes no AI
 calls at all; it is pure Printify REST.
 
-## 7. Printify vs Tapstitch — they are not interchangeable
+## 7. POD partner — Printify only
 
-See [`tapstitch.md`](tapstitch.md). Short version: Printify has a public REST API
-and can be driven end to end from code. **Tapstitch has no public developer API**,
-so apparel through Tapstitch cannot be a scripted pipeline stage — the last mile
-is a manual dashboard upload.
+**Printify is the single POD partner**, for apparel and hard goods alike. It has a
+public REST API (`https://api.printify.com/v1`), so concept → art → product →
+mockups stays scriptable end to end.
+
+Tapstitch was evaluated on 2026-09-11 and **dropped on 2026-09-27**: no public
+developer API, no endpoints, no auth scheme. The "REST API key" in their docs is a
+*WooCommerce* key you paste into *their* dashboard, not a key you call. Apparel
+through Tapstitch would have meant a permanent manual upload step — a downgrade
+from what Printify already does — so the research doc was removed with it.
+
+Live account, verified 2026-09-27 via `GET /v1/shops.json`: exactly one shop,
+**27415408 "EarlBiggersDammit"**, `sales_channel: etsy`. Every brand — AU2
+included — routes through it.

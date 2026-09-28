@@ -60,14 +60,40 @@ Blueprints verified against Printify's public catalog: **887** Stainless Steel
 Water Bottle · **478** Ceramic Mug · **400** Kiss-Cut Stickers · **12**
 Bella+Canvas 3001 · **6** Gildan 5000.
 
+**Print scale on wrap products — the gotcha.** Printify's `scale` is a fraction of
+the print-area *width*, and on drinkware that width is the whole circumference
+(bottle 887/provider 23: 2759×1500 px, aspect 1.84). Only about a third of it
+faces the buyer. So for **square** art the default `SCALE["bottle"] = 0.6` both
+overflows the 1500 px height and wraps two-thirds of the design around the back.
+Square lockups want **~0.33**; verified on the AU2 bottle.
+
+Re-scale in place rather than creating a second product — and **pass `--scale`
+explicitly**, since `--update` on its own falls back to the same 0.6 default that
+caused the problem:
+
+```bash
+./.venv/bin/python scripts/publish_merch_draft.py --brand au2 --product bottle \
+  --design data/art/<art>.png --slug <slug> --name "<Title>" --price 28 \
+  --scale 0.33 --update <product_id>
+```
+
+Mockup freshness is confirmed by **hashing the image bytes**: Printify re-renders
+behind the *same* `src` URL, so a URL comparison silently passes stale images. If
+the re-render hasn't landed within `--poll`, the script downloads nothing and
+exits 4 rather than filing the old render under the new slug.
+
 Prefer this over `publish_merch_single.py` / `publish_store.py` for anything that
 isn't Madd Hatchery — both are hardcoded to that storefront, crash if `.env` is
 missing, and shell out to a `rembg` venv that isn't installed.
 
-## Apparel / Tapstitch
+## POD partner — Printify, single source
 
-**Tapstitch has no public developer API** — it cannot be a scripted pipeline
-stage. Full finding and the three options: [`docs/tapstitch.md`](docs/tapstitch.md).
+**Printify is the POD partner for everything**: apparel, drinkware, stickers,
+posters. It has a public REST API, so every stage stays scriptable end to end.
+
+Tapstitch was evaluated and **dropped** (2026-09-27) — it has no public developer
+API, so apparel through it could never be a scripted pipeline stage. Do not
+reintroduce a second POD partner without a written API contract to build against.
 
 ## Open conflict — TE-4 is confirmed, not hypothetical
 
@@ -87,7 +113,7 @@ fix** — raise it, don't patch it.
 | TE-4b | Resolve the agent-in-app-code conflict: finish the move into `skills/`, or grant an exception? |
 | TE-6c | Clone on quasimodo too, or leave pop-os as the only working host? No GPU need either way. |
 | TE-7 | Should Northern Michigan merch reuse this pipeline as another brand? (= NMM-6) |
-| TE-9 | If apparel moves to Tapstitch, who owns the Etsy listing — Tapstitch's connector or `core/etsy.py`? |
+| ~~TE-9~~ | **CLOSED 2026-09-27** — apparel stays on Printify; Tapstitch dropped, so there is no second connector to collide with `core/etsy.py`. |
 | ~~TE-10~~ | **ANSWERED 2026-09-23** — "we have no connection to nor dependency to floor2 or .206". `core/mission_control.py`, the `mc-publish`/`mc-poll`/`mc-open` commands, the `--no-publish` flags and the `.local81` sync scope are all removed. `empire gate` (`core/local_approval.py`) is now the only approval gate. |
 
 ## Constraints (inherited — non-negotiable)

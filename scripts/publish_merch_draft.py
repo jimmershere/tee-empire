@@ -19,13 +19,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -67,12 +68,33 @@ def brand_shop_id(brand: str) -> str | None:
         return None
 
 
-def download(url: str, dest: Path) -> int:
+def fetch_bytes(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "tee-empire/1.0", "Accept": "image/*"})
     with urllib.request.urlopen(req, timeout=60) as r:
-        data = r.read()
+        return r.read()
+
+
+def download(url: str, dest: Path) -> int:
+    data = fetch_bytes(url)
     dest.write_bytes(data)
     return len(data)
+
+
+def mockup_digest(images: List[Dict[str, Any]]) -> Optional[str]:
+    """SHA-256 of the default mockup's *bytes*.
+
+    Printify re-renders a changed draft behind the **same** ``src`` URL — verified:
+    two renders of this product at different scales returned an identical URL and
+    different image bytes. So a URL comparison can never detect a re-render, and
+    the content has to be hashed instead.
+    """
+    src = next((i.get("src") for i in images if i.get("is_default")), None)
+    if not src:
+        return None
+    try:
+        return hashlib.sha256(fetch_bytes(src)).hexdigest()
+    except Exception:
+        return None
 
 
 def main() -> int:
@@ -90,6 +112,9 @@ def main() -> int:
     ap.add_argument("--provider", type=int, default=None, help="print provider id (default: first)")
     ap.add_argument("--out-dir", default=str(ROOT / "data" / "mockups"))
     ap.add_argument("--poll", type=int, default=20, help="max mockup polls (5s apart)")
+    ap.add_argument("--update", default="", metavar="PRODUCT_ID",
+                    help="re-scale an existing draft in place and re-pull mockups, "
+                         "instead of creating a second product")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the intended payload and exit without calling Printify")
     args = ap.parse_args()
@@ -120,17 +145,34 @@ def main() -> int:
 
     if args.dry_run:
         print("\n--- DRY RUN: no Printify calls made ---")
-        print(json.dumps({
-            "endpoint": f"POST /v1/shops/{shop_id}/products.json",
-            "title": args.name,
-            "blueprint_id": bp,
-            "print_provider_id": args.provider or "<first available>",
-            "variants": "<all variants for blueprint/provider> @ %d cents" % price_cents,
-            "print_areas": [{"placeholders": [{"position": "front", "images": [
-                {"id": "<upload id>", "x": 0.5, "y": 0.5, "scale": scale, "angle": 0}]}]}],
-            "tags": tags,
-            "visible": False,
-        }, indent=2))
+        if args.update:
+            # --update issues a PUT that rewrites only the transform; describing
+            # a create here would make the preview wrong for the very operation
+            # being previewed.
+            preview = {
+                "endpoint": f"PUT /v1/shops/{shop_id}/products/{args.update}.json",
+                "note": "re-scales the existing draft in place; no upload, no create",
+                "print_areas": [{
+                    "variant_ids": "<every variant already on the product, reused verbatim>",
+                    "placeholders": [{"position": "<existing>", "images": [
+                        {"id": "<existing image id>", "x": "<existing>", "y": "<existing>",
+                         "scale": scale, "angle": "<existing>"}]}],
+                }],
+                "unchanged": ["title", "description", "tags", "variants", "prices", "visible"],
+            }
+        else:
+            preview = {
+                "endpoint": f"POST /v1/shops/{shop_id}/products.json",
+                "title": args.name,
+                "blueprint_id": bp,
+                "print_provider_id": args.provider or "<first available>",
+                "variants": "<all variants for blueprint/provider> @ %d cents" % price_cents,
+                "print_areas": [{"placeholders": [{"position": "front", "images": [
+                    {"id": "<upload id>", "x": 0.5, "y": 0.5, "scale": scale, "angle": 0}]}]}],
+                "tags": tags,
+                "visible": False,
+            }
+        print(json.dumps(preview, indent=2))
         return 0
 
     client = P.PrintifyClient(shop_id=shop_id)
@@ -143,43 +185,96 @@ def main() -> int:
               file=sys.stderr)
         return 3
 
-    # 1. provider + variants
-    prov = client.list_print_providers(bp)
-    plist = prov if isinstance(prov, list) else prov.get("data", prov)
-    pid = args.provider or plist[0]["id"]
-    pname = next((p.get("title") for p in plist if p["id"] == pid), "?")
-    vres = client.list_variants(bp, pid)
-    vlist = vres.get("variants") if isinstance(vres, dict) else vres
-    vids = [v["id"] for v in vlist]
-    print(f"\nprovider   : {pid} ({pname})")
-    print(f"variants   : {len(vids)} -> {[v.get('title') for v in vlist][:6]}")
+    stale_digest = None
+    if args.update:
+        # Re-scale an existing draft in place. Printify rejects a print_areas
+        # update unless every variant is present, so reuse the product's own
+        # print_areas wholesale and only change the transform (error 8251).
+        product_id = args.update
+        existing = client.get_product(product_id)
+        pid = existing.get("print_provider_id")
+        vids = [v["id"] for v in existing.get("variants", [])]
+        image_id = None
+        new_areas = []
+        for area in existing.get("print_areas", []):
+            phs = []
+            for ph in area.get("placeholders", []):
+                imgs = []
+                for im in ph.get("images", []):
+                    image_id = image_id or im.get("id")
+                    imgs.append({"id": im["id"], "x": im.get("x", 0.5),
+                                 "y": im.get("y", 0.5), "scale": scale,
+                                 "angle": im.get("angle", 0)})
+                phs.append({"position": ph.get("position", "front"), "images": imgs})
+            new_areas.append({"variant_ids": area.get("variant_ids", []), "placeholders": phs})
+        stale_digest = mockup_digest(existing.get("images") or [])
+        client.update_product(product_id, {"print_areas": new_areas})
+        print(f"\nUPDATED    : draft {product_id} re-scaled to {scale} (still visible=False)")
+    else:
+        # 1. provider + variants
+        prov = client.list_print_providers(bp)
+        plist = prov if isinstance(prov, list) else prov.get("data", prov)
+        pid = args.provider or plist[0]["id"]
+        pname = next((p.get("title") for p in plist if p["id"] == pid), "?")
+        vres = client.list_variants(bp, pid)
+        vlist = vres.get("variants") if isinstance(vres, dict) else vres
+        vids = [v["id"] for v in vlist]
+        print(f"\nprovider   : {pid} ({pname})")
+        print(f"variants   : {len(vids)} -> {[v.get('title') for v in vlist][:6]}")
 
-    # 2. upload print art
-    up = client.upload_image(f"{args.slug}-print.png", art)
-    image_id = up["id"]
-    print(f"uploaded   : image id {image_id}")
+        # 2. upload print art
+        up = client.upload_image(f"{args.slug}-print.png", art)
+        image_id = up["id"]
+        print(f"uploaded   : image id {image_id}")
 
-    # 3. create the DRAFT (visible: False)
-    res = client.create_product(
-        title=args.name, description=args.description or args.name,
-        blueprint_id=bp, variant_ids=vids, image_id=image_id,
-        print_provider_id=pid, tags=tags, price_cents=price_cents,
-        product_type=args.product, image_transform={"x": 0.5, "y": 0.5, "scale": scale},
-    )
-    product_id = res["id"]
-    print(f"DRAFT      : printify product {product_id}  (visible=False, not published)")
+        # 3. create the DRAFT (visible: False)
+        res = client.create_product(
+            title=args.name, description=args.description or args.name,
+            blueprint_id=bp, variant_ids=vids, image_id=image_id,
+            print_provider_id=pid, tags=tags, price_cents=price_cents,
+            product_type=args.product, image_transform={"x": 0.5, "y": 0.5, "scale": scale},
+        )
+        product_id = res["id"]
+        print(f"DRAFT      : printify product {product_id}  (visible=False, not published)")
 
     # 4. poll until Printify renders the mockups
+    # On an --update the old mockups stay attached, at the same URL, until
+    # Printify re-renders — so freshness is confirmed by hashing the bytes.
     images: List[Dict[str, Any]] = []
+    fresh = False
     for attempt in range(args.poll):
         full = client.get_product(product_id)
         images = full.get("images") or []
         if images:
-            break
+            if not args.update:               # create path: any render is new
+                fresh = True
+                break
+            if stale_digest is None:
+                # Update mode, but the pre-update render could not be hashed
+                # (no prior mockup, or the fetch failed). There is no baseline
+                # to compare against, so say so rather than claiming freshness.
+                print("  note: no pre-update baseline to compare — "
+                      "mockup freshness cannot be confirmed", file=sys.stderr)
+                fresh = True
+                break
+            if mockup_digest(images) != stale_digest:
+                fresh = True
+                break
         print(f"  waiting for mockups... ({attempt + 1}/{args.poll})")
         time.sleep(5)
+
     if not images:
         print("warning: no mockups rendered yet; re-run get_product later", file=sys.stderr)
+    elif not fresh:
+        # The old render is still being served. Saving it would silently file
+        # stale images under the new slug and report them as the new scale.
+        print(f"\nERROR: Printify had not re-rendered after {args.poll * 5}s — the mockups "
+              f"still match the previous render.\n"
+              f"       Nothing was downloaded, so the stale images cannot be mistaken for "
+              f"the new scale.\n"
+              f"       The draft itself IS updated. Re-run the same command with a longer "
+              f"--poll to collect mockups.", file=sys.stderr)
+        return 4
 
     # 5. download them
     out = Path(args.out_dir) / args.slug
@@ -205,7 +300,12 @@ def main() -> int:
                 "print_provider_id": pid, "printify_product_id": product_id,
                 "shop_id": client.shop_id, "image_id": image_id, "name": args.name,
                 "price_cents": price_cents, "scale": scale, "visible": False,
-                "published": False, "variant_count": len(vids), "mockups": saved}
+                "published": False, "variant_count": len(vids),
+                # True only when the bytes were confirmed to differ from the
+                # pre-update render, so a manifest never implies a freshness
+                # that was not actually observed.
+                "mockups_confirmed_fresh": fresh,
+                "mockups": saved}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nmockups    : {out}  ({len(saved)} images + manifest.json)")
     print("next       : review the mockups, then publish from the Printify dashboard "
