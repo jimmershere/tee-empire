@@ -19,7 +19,7 @@ lanes:
 adult_listing_default: false
 pricing:
   base_usd: 28.0
-printify_shop_id: ""
+printify_shop_id: "27415408"   # EarlBiggersDammit (Etsy) — AU2 merch sells under Earl Biggers
 printify_blueprint_id: 12
 printify_print_provider_id: 6
 printify_variant_ids: [18100, 18101, 18102, 18103, 18104]

@@ -4,7 +4,8 @@
 .telegram_token
 data/empire.db
 data/empire.db-*
-data/mockups/*.png
+data/mockups/
+
 data/mc_stage/
 data/runs/*.log
 data/runs/*.json

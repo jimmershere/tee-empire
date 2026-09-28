@@ -90,6 +90,9 @@ def main() -> int:
     ap.add_argument("--provider", type=int, default=None, help="print provider id (default: first)")
     ap.add_argument("--out-dir", default=str(ROOT / "data" / "mockups"))
     ap.add_argument("--poll", type=int, default=20, help="max mockup polls (5s apart)")
+    ap.add_argument("--update", default="", metavar="PRODUCT_ID",
+                    help="re-scale an existing draft in place and re-pull mockups, "
+                         "instead of creating a second product")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the intended payload and exit without calling Printify")
     args = ap.parse_args()
@@ -143,38 +146,69 @@ def main() -> int:
               file=sys.stderr)
         return 3
 
-    # 1. provider + variants
-    prov = client.list_print_providers(bp)
-    plist = prov if isinstance(prov, list) else prov.get("data", prov)
-    pid = args.provider or plist[0]["id"]
-    pname = next((p.get("title") for p in plist if p["id"] == pid), "?")
-    vres = client.list_variants(bp, pid)
-    vlist = vres.get("variants") if isinstance(vres, dict) else vres
-    vids = [v["id"] for v in vlist]
-    print(f"\nprovider   : {pid} ({pname})")
-    print(f"variants   : {len(vids)} -> {[v.get('title') for v in vlist][:6]}")
+    stale_src = None
+    if args.update:
+        # Re-scale an existing draft in place. Printify rejects a print_areas
+        # update unless every variant is present, so reuse the product's own
+        # print_areas wholesale and only change the transform (error 8251).
+        product_id = args.update
+        existing = client.get_product(product_id)
+        pid = existing.get("print_provider_id")
+        vids = [v["id"] for v in existing.get("variants", [])]
+        image_id = None
+        new_areas = []
+        for area in existing.get("print_areas", []):
+            phs = []
+            for ph in area.get("placeholders", []):
+                imgs = []
+                for im in ph.get("images", []):
+                    image_id = image_id or im.get("id")
+                    imgs.append({"id": im["id"], "x": im.get("x", 0.5),
+                                 "y": im.get("y", 0.5), "scale": scale,
+                                 "angle": im.get("angle", 0)})
+                phs.append({"position": ph.get("position", "front"), "images": imgs})
+            new_areas.append({"variant_ids": area.get("variant_ids", []), "placeholders": phs})
+        old_imgs = existing.get("images") or []
+        stale_src = next((i.get("src") for i in old_imgs if i.get("is_default")), None)
+        client.update_product(product_id, {"print_areas": new_areas})
+        print(f"\nUPDATED    : draft {product_id} re-scaled to {scale} (still visible=False)")
+    else:
+        # 1. provider + variants
+        prov = client.list_print_providers(bp)
+        plist = prov if isinstance(prov, list) else prov.get("data", prov)
+        pid = args.provider or plist[0]["id"]
+        pname = next((p.get("title") for p in plist if p["id"] == pid), "?")
+        vres = client.list_variants(bp, pid)
+        vlist = vres.get("variants") if isinstance(vres, dict) else vres
+        vids = [v["id"] for v in vlist]
+        print(f"\nprovider   : {pid} ({pname})")
+        print(f"variants   : {len(vids)} -> {[v.get('title') for v in vlist][:6]}")
 
-    # 2. upload print art
-    up = client.upload_image(f"{args.slug}-print.png", art)
-    image_id = up["id"]
-    print(f"uploaded   : image id {image_id}")
+        # 2. upload print art
+        up = client.upload_image(f"{args.slug}-print.png", art)
+        image_id = up["id"]
+        print(f"uploaded   : image id {image_id}")
 
-    # 3. create the DRAFT (visible: False)
-    res = client.create_product(
-        title=args.name, description=args.description or args.name,
-        blueprint_id=bp, variant_ids=vids, image_id=image_id,
-        print_provider_id=pid, tags=tags, price_cents=price_cents,
-        product_type=args.product, image_transform={"x": 0.5, "y": 0.5, "scale": scale},
-    )
-    product_id = res["id"]
-    print(f"DRAFT      : printify product {product_id}  (visible=False, not published)")
+        # 3. create the DRAFT (visible: False)
+        res = client.create_product(
+            title=args.name, description=args.description or args.name,
+            blueprint_id=bp, variant_ids=vids, image_id=image_id,
+            print_provider_id=pid, tags=tags, price_cents=price_cents,
+            product_type=args.product, image_transform={"x": 0.5, "y": 0.5, "scale": scale},
+        )
+        product_id = res["id"]
+        print(f"DRAFT      : printify product {product_id}  (visible=False, not published)")
 
     # 4. poll until Printify renders the mockups
+    # On an --update the old mockups are still attached until Printify re-renders,
+    # so wait for the default image to actually change rather than re-downloading
+    # the stale set.
     images: List[Dict[str, Any]] = []
     for attempt in range(args.poll):
         full = client.get_product(product_id)
         images = full.get("images") or []
-        if images:
+        cur = next((i.get("src") for i in images if i.get("is_default")), None)
+        if images and cur != stale_src:
             break
         print(f"  waiting for mockups... ({attempt + 1}/{args.poll})")
         time.sleep(5)
