@@ -19,13 +19,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -67,12 +68,33 @@ def brand_shop_id(brand: str) -> str | None:
         return None
 
 
-def download(url: str, dest: Path) -> int:
+def fetch_bytes(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": "tee-empire/1.0", "Accept": "image/*"})
     with urllib.request.urlopen(req, timeout=60) as r:
-        data = r.read()
+        return r.read()
+
+
+def download(url: str, dest: Path) -> int:
+    data = fetch_bytes(url)
     dest.write_bytes(data)
     return len(data)
+
+
+def mockup_digest(images: List[Dict[str, Any]]) -> Optional[str]:
+    """SHA-256 of the default mockup's *bytes*.
+
+    Printify re-renders a changed draft behind the **same** ``src`` URL — verified:
+    two renders of this product at different scales returned an identical URL and
+    different image bytes. So a URL comparison can never detect a re-render, and
+    the content has to be hashed instead.
+    """
+    src = next((i.get("src") for i in images if i.get("is_default")), None)
+    if not src:
+        return None
+    try:
+        return hashlib.sha256(fetch_bytes(src)).hexdigest()
+    except Exception:
+        return None
 
 
 def main() -> int:
@@ -123,17 +145,34 @@ def main() -> int:
 
     if args.dry_run:
         print("\n--- DRY RUN: no Printify calls made ---")
-        print(json.dumps({
-            "endpoint": f"POST /v1/shops/{shop_id}/products.json",
-            "title": args.name,
-            "blueprint_id": bp,
-            "print_provider_id": args.provider or "<first available>",
-            "variants": "<all variants for blueprint/provider> @ %d cents" % price_cents,
-            "print_areas": [{"placeholders": [{"position": "front", "images": [
-                {"id": "<upload id>", "x": 0.5, "y": 0.5, "scale": scale, "angle": 0}]}]}],
-            "tags": tags,
-            "visible": False,
-        }, indent=2))
+        if args.update:
+            # --update issues a PUT that rewrites only the transform; describing
+            # a create here would make the preview wrong for the very operation
+            # being previewed.
+            preview = {
+                "endpoint": f"PUT /v1/shops/{shop_id}/products/{args.update}.json",
+                "note": "re-scales the existing draft in place; no upload, no create",
+                "print_areas": [{
+                    "variant_ids": "<every variant already on the product, reused verbatim>",
+                    "placeholders": [{"position": "<existing>", "images": [
+                        {"id": "<existing image id>", "x": "<existing>", "y": "<existing>",
+                         "scale": scale, "angle": "<existing>"}]}],
+                }],
+                "unchanged": ["title", "description", "tags", "variants", "prices", "visible"],
+            }
+        else:
+            preview = {
+                "endpoint": f"POST /v1/shops/{shop_id}/products.json",
+                "title": args.name,
+                "blueprint_id": bp,
+                "print_provider_id": args.provider or "<first available>",
+                "variants": "<all variants for blueprint/provider> @ %d cents" % price_cents,
+                "print_areas": [{"placeholders": [{"position": "front", "images": [
+                    {"id": "<upload id>", "x": 0.5, "y": 0.5, "scale": scale, "angle": 0}]}]}],
+                "tags": tags,
+                "visible": False,
+            }
+        print(json.dumps(preview, indent=2))
         return 0
 
     client = P.PrintifyClient(shop_id=shop_id)
@@ -146,7 +185,7 @@ def main() -> int:
               file=sys.stderr)
         return 3
 
-    stale_src = None
+    stale_digest = None
     if args.update:
         # Re-scale an existing draft in place. Printify rejects a print_areas
         # update unless every variant is present, so reuse the product's own
@@ -168,8 +207,7 @@ def main() -> int:
                                  "angle": im.get("angle", 0)})
                 phs.append({"position": ph.get("position", "front"), "images": imgs})
             new_areas.append({"variant_ids": area.get("variant_ids", []), "placeholders": phs})
-        old_imgs = existing.get("images") or []
-        stale_src = next((i.get("src") for i in old_imgs if i.get("is_default")), None)
+        stale_digest = mockup_digest(existing.get("images") or [])
         client.update_product(product_id, {"print_areas": new_areas})
         print(f"\nUPDATED    : draft {product_id} re-scaled to {scale} (still visible=False)")
     else:
@@ -200,20 +238,43 @@ def main() -> int:
         print(f"DRAFT      : printify product {product_id}  (visible=False, not published)")
 
     # 4. poll until Printify renders the mockups
-    # On an --update the old mockups are still attached until Printify re-renders,
-    # so wait for the default image to actually change rather than re-downloading
-    # the stale set.
+    # On an --update the old mockups stay attached, at the same URL, until
+    # Printify re-renders — so freshness is confirmed by hashing the bytes.
     images: List[Dict[str, Any]] = []
+    fresh = False
     for attempt in range(args.poll):
         full = client.get_product(product_id)
         images = full.get("images") or []
-        cur = next((i.get("src") for i in images if i.get("is_default")), None)
-        if images and cur != stale_src:
-            break
+        if images:
+            if not args.update:               # create path: any render is new
+                fresh = True
+                break
+            if stale_digest is None:
+                # Update mode, but the pre-update render could not be hashed
+                # (no prior mockup, or the fetch failed). There is no baseline
+                # to compare against, so say so rather than claiming freshness.
+                print("  note: no pre-update baseline to compare — "
+                      "mockup freshness cannot be confirmed", file=sys.stderr)
+                fresh = True
+                break
+            if mockup_digest(images) != stale_digest:
+                fresh = True
+                break
         print(f"  waiting for mockups... ({attempt + 1}/{args.poll})")
         time.sleep(5)
+
     if not images:
         print("warning: no mockups rendered yet; re-run get_product later", file=sys.stderr)
+    elif not fresh:
+        # The old render is still being served. Saving it would silently file
+        # stale images under the new slug and report them as the new scale.
+        print(f"\nERROR: Printify had not re-rendered after {args.poll * 5}s — the mockups "
+              f"still match the previous render.\n"
+              f"       Nothing was downloaded, so the stale images cannot be mistaken for "
+              f"the new scale.\n"
+              f"       The draft itself IS updated. Re-run the same command with a longer "
+              f"--poll to collect mockups.", file=sys.stderr)
+        return 4
 
     # 5. download them
     out = Path(args.out_dir) / args.slug
@@ -239,7 +300,12 @@ def main() -> int:
                 "print_provider_id": pid, "printify_product_id": product_id,
                 "shop_id": client.shop_id, "image_id": image_id, "name": args.name,
                 "price_cents": price_cents, "scale": scale, "visible": False,
-                "published": False, "variant_count": len(vids), "mockups": saved}
+                "published": False, "variant_count": len(vids),
+                # True only when the bytes were confirmed to differ from the
+                # pre-update render, so a manifest never implies a freshness
+                # that was not actually observed.
+                "mockups_confirmed_fresh": fresh,
+                "mockups": saved}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nmockups    : {out}  ({len(saved)} images + manifest.json)")
     print("next       : review the mockups, then publish from the Printify dashboard "
