@@ -38,11 +38,33 @@ from core import printify as P  # noqa: E402
 #   887 Stainless Steel Water Bottle, Standard Lid
 #   478 Ceramic Mug, (11oz, 15oz)
 #   400 Kiss-Cut Stickers
-BLUEPRINT = {"bottle": 887, "mug": 478, "sticker": 400}
+#   6   Gildan 5000 Unisex Heavy Cotton Tee
+#   77  Gildan 18500 Unisex Heavy Blend Hooded Sweatshirt
+BLUEPRINT = {"bottle": 887, "mug": 478, "sticker": 400, "tee": 6, "hoodie": 77}
 
-# Fraction of the print area the art fills. Wrap-around products need headroom so
-# the design doesn't run into the seam.
-SCALE = {"bottle": 0.60, "mug": 0.70, "sticker": 0.95}
+# Default print provider per product — chosen because it stocks the full AU2
+# colourway (black / white / grey / light blue / navy / pink). Override with
+# --provider; a provider that lacks a requested colour simply yields fewer
+# variants, so --colors reports what it actually matched.
+PROVIDER = {"tee": 6, "hoodie": 29}
+
+# Fraction of the print area the art fills. Printify scales relative to print-area
+# WIDTH, so the right number depends on the area's aspect vs the art's:
+#   tee    front 4500x5700 (0.79, portrait) — portrait art fits happily; the
+#          binding limit here is resolution, not geometry (see the DPI note below).
+#   hoodie front 3709x2472 (1.50, LANDSCAPE — the band above the kangaroo pocket).
+#          Portrait art at 0.9 would overflow the height badly. 0.55 is the
+#          largest that fits ~0.83-aspect art, and reads as a normal chest print.
+#          For a full-size design the hoodie BACK (3461x3955, 0.88) is the better
+#          home — pass --position back --scale 0.9.
+# Wrap-around drinkware needs headroom so the design doesn't run into the seam.
+SCALE = {"bottle": 0.60, "mug": 0.70, "sticker": 0.95, "tee": 0.60, "hoodie": 0.55}
+
+# Why tee is 0.60 and not 0.90: Printify print areas are sized for 300 DPI, so the
+# tee front (4500x5700) is a 15"x19" canvas. The AU2 designs are ~1200 px wide, so
+# a 0.90 scale = a 13.5" print upscaled from 1200 px — about 89 DPI, visibly soft.
+# 0.60 gives a 9" chest print at ~133 DPI, which holds up for bold cartoon line
+# art. To print full-size, re-export the art at 3600 px+ and raise this.
 
 
 def load_env(path: Path) -> None:
@@ -109,7 +131,13 @@ def main() -> int:
     ap.add_argument("--price", type=float, required=True, help="retail price in USD")
     ap.add_argument("--tags", default="", help="comma-separated")
     ap.add_argument("--scale", type=float, default=None, help="override print scale")
-    ap.add_argument("--provider", type=int, default=None, help="print provider id (default: first)")
+    ap.add_argument("--provider", type=int, default=None,
+                    help="print provider id (default: PROVIDER map, else first)")
+    ap.add_argument("--colors", default="",
+                    help="comma-separated colour names to enable (default: every colour). "
+                         "Matched case-insensitively, exact name first then substring.")
+    ap.add_argument("--position", default="front",
+                    help="print placeholder: front, back, left_sleeve, … (default: front)")
     ap.add_argument("--out-dir", default=str(ROOT / "data" / "mockups"))
     ap.add_argument("--poll", type=int, default=20, help="max mockup polls (5s apart)")
     ap.add_argument("--update", default="", metavar="PRODUCT_ID",
@@ -205,8 +233,15 @@ def main() -> int:
                     imgs.append({"id": im["id"], "x": im.get("x", 0.5),
                                  "y": im.get("y", 0.5), "scale": scale,
                                  "angle": im.get("angle", 0)})
-                phs.append({"position": ph.get("position", "front"), "images": imgs})
-            new_areas.append({"variant_ids": area.get("variant_ids", []), "placeholders": phs})
+                # Apparel carries placeholders it has no art for (a tee has both
+                # front and back). Printify rejects an empty `images` array
+                # (error 8150), so an unused placeholder is dropped rather than
+                # echoed back. Drinkware has a single placeholder, which is why
+                # this only shows up on garments.
+                if imgs:
+                    phs.append({"position": ph.get("position", "front"), "images": imgs})
+            if phs:
+                new_areas.append({"variant_ids": area.get("variant_ids", []), "placeholders": phs})
         stale_digest = mockup_digest(existing.get("images") or [])
         client.update_product(product_id, {"print_areas": new_areas})
         print(f"\nUPDATED    : draft {product_id} re-scaled to {scale} (still visible=False)")
@@ -214,13 +249,41 @@ def main() -> int:
         # 1. provider + variants
         prov = client.list_print_providers(bp)
         plist = prov if isinstance(prov, list) else prov.get("data", prov)
-        pid = args.provider or plist[0]["id"]
+        pid = args.provider or PROVIDER.get(args.product) or plist[0]["id"]
         pname = next((p.get("title") for p in plist if p["id"] == pid), "?")
         vres = client.list_variants(bp, pid)
         vlist = vres.get("variants") if isinstance(vres, dict) else vres
-        vids = [v["id"] for v in vlist]
         print(f"\nprovider   : {pid} ({pname})")
-        print(f"variants   : {len(vids)} -> {[v.get('title') for v in vlist][:6]}")
+
+        if args.colors:
+            wanted = [c.strip().lower() for c in args.colors.split(",") if c.strip()]
+            available = sorted({v.get("options", {}).get("color", "") for v in vlist
+                                if v.get("options", {}).get("color")})
+            chosen, missing = [], []
+            for w in wanted:
+                # Exact name wins; fall back to substring so "grey" finds
+                # "Sport Grey" without also dragging in unrelated colourways.
+                hit = [c for c in available if c.lower() == w] or \
+                      [c for c in available if w in c.lower()]
+                if hit:
+                    chosen.append(hit[0])
+                else:
+                    missing.append(w)
+            keep = {c.lower() for c in chosen}
+            vlist = [v for v in vlist
+                     if v.get("options", {}).get("color", "").lower() in keep]
+            print(f"colors     : {len(chosen)}/{len(wanted)} matched -> {chosen}")
+            if missing:
+                # Loud, because a silently-dropped colour is a silently smaller
+                # product than the one that was asked for.
+                print(f"  WARNING: not stocked by provider {pid}: {missing}", file=sys.stderr)
+            if not vlist:
+                print("error: no variants matched the requested colors", file=sys.stderr)
+                return 5
+
+        vids = [v["id"] for v in vlist]
+        sizes_seen = sorted({v.get("options", {}).get("size", "") for v in vlist})
+        print(f"variants   : {len(vids)}  ({len(sizes_seen)} sizes: {', '.join(s for s in sizes_seen if s)})")
 
         # 2. upload print art
         up = client.upload_image(f"{args.slug}-print.png", art)
@@ -233,6 +296,10 @@ def main() -> int:
             blueprint_id=bp, variant_ids=vids, image_id=image_id,
             print_provider_id=pid, tags=tags, price_cents=price_cents,
             product_type=args.product, image_transform={"x": 0.5, "y": 0.5, "scale": scale},
+            # `placements` carries the position through; without it create_product
+            # hardcodes "front", which silently ignores --position back.
+            placements=[{"position": args.position, "image_id": image_id,
+                         "x": 0.5, "y": 0.5, "scale": scale, "angle": 0}],
         )
         product_id = res["id"]
         print(f"DRAFT      : printify product {product_id}  (visible=False, not published)")
